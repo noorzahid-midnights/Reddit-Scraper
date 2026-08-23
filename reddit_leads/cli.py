@@ -15,7 +15,7 @@ def parse_args(argv=None):
     )
     parser.add_argument("-o", "--out", default="leads.csv", help="output CSV path")
     parser.add_argument("-n", "--limit", type=int, default=config.DEFAULT_LEAD_COUNT,
-                        help="number of leads to return (default: 20)")
+                        help="number of leads to return; 0 = no limit (default)")
     parser.add_argument("-d", "--days", type=int, default=config.DEFAULT_MAX_AGE_DAYS,
                         help="maximum post age in days (default: 14)")
     parser.add_argument("--delay", type=float, default=config.REQUEST_DELAY_SECONDS,

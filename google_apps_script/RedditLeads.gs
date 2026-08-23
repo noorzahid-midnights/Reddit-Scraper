@@ -13,7 +13,7 @@
 
 var CONFIG = {
   MAX_AGE_DAYS: 14,           // ignore posts older than this
-  MAX_NEW_PER_RUN: 20,        // cap on leads added per run
+  MAX_NEW_PER_RUN: 0,         // cap on leads added per run; 0 = no cap
   KEEP_DAYS: 30,              // drop rows added longer ago than this; 0 = keep all
   RUN_HOURS: [8, 20],         // twice daily, in the script's timezone
   SHEET_NAME: 'AI Remote Leads',
@@ -28,9 +28,13 @@ var CONFIG = {
 };
 
 var GIG_SUBREDDITS = ['forhire', 'jobbit', 'hiring', 'freelance_forhire',
-                      'RemoteJobs', 'remotejs', 'WorkOnline', 'b2bforhire'];
+                      'RemoteJobs', 'remotejs', 'WorkOnline', 'b2bforhire',
+                      'slavelabour', 'DoneDirtCheap'];
 var AI_SUBREDDITS = ['AI_Agents', 'n8n', 'LLMDevs', 'MachineLearningJobs',
-                     'automation', 'LocalLLaMA', 'PromptEngineering'];
+                     'automation', 'LocalLLaMA', 'PromptEngineering',
+                     'MachineLearning', 'datascience', 'ChatGPTCoding',
+                     'OpenAI', 'SaaS', 'Entrepreneur', 'smallbusiness',
+                     'startups', 'webdev', 'freelance'];
 var FEED_QUERY = 'AI OR LLM OR GPT OR chatbot OR machine learning OR automation';
 var GLOBAL_QUERIES = ['hiring AI engineer remote',
                       'looking for AI developer remote paid',
@@ -46,7 +50,7 @@ var REMOTE = ['remote','fully remote','work from home','wfh','telecommute','anyw
 var ONSITE = ['onsite','on-site','on site','in-person','in person','in office','in-office','on premise','on-premise','hybrid','must be located','must be based','must reside','must live in','must be local','local only','locals only','local candidates','relocate','relocation','commute','commutable','days in the office','days in office','come to the office','our office','office-based','office based'];
 var NEGATIONS = ['no','not','non','never','zero','without','avoid'];
 var REMOTE_SUBS = ['remotejobs','remotejs','workonline','jobbit'];
-var SELF_PROMO_PREFIX = ['[for hire]','[forhire]','(for hire)','for hire','[available]','available for hire','hire me','[task]','[advert]'];
+var SELF_PROMO_PREFIX = ['[for hire]','[forhire]','(for hire)','for hire','[available]','available for hire','hire me','[offer]','[advert]'];
 var JOB_TERMS = ['full-time','full time','part-time','part time','salary','salaried','benefits','position','role','employee','annual','per year','/yr'];
 var STOPWORDS = ['a','an','the','for','to','of','and','or','in','on','at','with','we','our','you','your','is','are','be','need','needed','looking','hiring','hire','job','role','remote','usd','hour','hr','week','month','paid','pay','help','please','new','up'];
 
@@ -114,8 +118,9 @@ function generateLeads() {
   var sheet = ensureLeadsSheet();
   var seen = existingPostIds(sheet);
 
+  var cap = CONFIG.MAX_NEW_PER_RUN > 0 ? CONFIG.MAX_NEW_PER_RUN : Infinity;
   var fresh = [];
-  for (var i = 0; i < result.rows.length && fresh.length < CONFIG.MAX_NEW_PER_RUN; i++) {
+  for (var i = 0; i < result.rows.length && fresh.length < cap; i++) {
     var id = postIdFromUrl(result.rows[i][URL_INDEX]);
     if (!id || seen[id]) { continue; }
     seen[id] = true;

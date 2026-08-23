@@ -87,12 +87,15 @@ def build_leads(posts, max_age_days=config.DEFAULT_MAX_AGE_DAYS,
     leads.sort(key=lambda item: item["score"], reverse=True)
     unique, duplicates = dedupe.deduplicate(leads)
 
+    # limit of 0 (or less) means "every lead that passed", not "none".
+    kept = unique if not limit or limit <= 0 else unique[:limit]
+
     stats = {
         "fetched": len(posts),
         "passed_filters": len(leads),
         "duplicates_removed": duplicates,
         "unique": len(unique),
-        "returned": min(limit, len(unique)),
+        "returned": len(kept),
         "rejections": rejections,
     }
-    return [lead["row"] for lead in unique[:limit]], stats
+    return [lead["row"] for lead in kept], stats

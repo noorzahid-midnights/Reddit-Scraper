@@ -14,8 +14,8 @@ cd Reddit-Scraper
 python3 -m reddit_leads
 ```
 
-That writes `leads.csv` with the top 20 leads. Nothing to install — the tool is
-Python 3.8+ standard library only.
+That writes `leads.csv` with every lead that passes the filters. Nothing to
+install — the tool is Python 3.8+ standard library only.
 
 ```bash
 python3 -m reddit_leads --limit 40 --days 7 --out this_week.csv
@@ -23,14 +23,15 @@ python3 -m reddit_leads --limit 40 --days 7 --out this_week.csv
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `-n, --limit` | `20` | how many leads to return |
+| `-n, --limit` | `0` | how many leads to return; `0` = every match |
 | `-d, --days` | `14` | maximum post age |
 | `-o, --out` | `leads.csv` | output path |
 | `--delay` | `2.0` | seconds between requests (raise if rate-limited) |
 | `--save-raw PATH` | – | also dump every fetched post as JSON |
 | `--from-json PATH` | – | re-score a saved dump without re-fetching |
 
-A full run makes 56 requests and takes roughly two minutes.
+A full run makes 92 requests and takes roughly three minutes. There is no cap
+on how many leads come back: the filters decide, not a quota.
 
 ## What counts as a lead
 
@@ -179,7 +180,7 @@ looking like a quiet week.
 | `CONFIG` key | Default | Meaning |
 | --- | --- | --- |
 | `RUN_HOURS` | `[8, 20]` | hours of the day to run |
-| `MAX_NEW_PER_RUN` | `20` | cap on leads added per run |
+| `MAX_NEW_PER_RUN` | `0` | cap on leads added per run; `0` = no cap |
 | `KEEP_DAYS` | `30` | drop rows added longer ago than this; `0` keeps everything |
 | `EMAIL_ON_NEW_LEADS` | `false` | email you when new leads land |
 | `EMAIL_TO` | `''` | blank = whoever owns the script |

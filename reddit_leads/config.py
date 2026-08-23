@@ -17,6 +17,8 @@ GIG_SUBREDDITS = [
     "remotejs",
     "WorkOnline",
     "b2bforhire",
+    "slavelabour",
+    "DoneDirtCheap",
 ]
 
 # Subreddits about AI/automation where "I need someone to build X" shows up.
@@ -29,6 +31,16 @@ AI_SUBREDDITS = [
     "LocalLLaMA",
     "PromptEngineering",
     "AutoGenAI",
+    "MachineLearning",
+    "datascience",
+    "ChatGPTCoding",
+    "OpenAI",
+    "SaaS",
+    "Entrepreneur",
+    "smallbusiness",
+    "startups",
+    "webdev",
+    "freelance",
 ]
 
 # Queries run against the gig subreddits (subreddit-restricted search).
@@ -113,7 +125,7 @@ SELF_PROMO_TERMS = [
     "[for hire]", "[forhire]", "for hire", "[available]", "available for hire",
     "hire me", "i am available", "i'm available", "my portfolio",
     "offering my services", "i offer", "i can build", "i will build",
-    "[task]", "[advert]", "[showcase]",
+    "[offer]", "[advert]", "[showcase]",
 ]
 
 # Words that make a post a full-time-ish job rather than a one-off gig.
@@ -154,7 +166,7 @@ NEGATION_PREFIXES = [
 
 # --- Recency -----------------------------------------------------------------
 DEFAULT_MAX_AGE_DAYS = 14
-DEFAULT_LEAD_COUNT = 20
+DEFAULT_LEAD_COUNT = 0  # 0 = return every lead that passes the filters
 
 # --- HTTP --------------------------------------------------------------------
 # Reddit asks for a descriptive, non-browser-impersonating User-Agent.
