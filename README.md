@@ -150,13 +150,42 @@ status and parsed entry count for each feed type.
 4. Run `generateLeads` once and approve the permission prompt
 5. Reload the sheet — a **Reddit Leads** menu appears; use it any time
 
-Results land in a sheet named **AI Remote Leads**, and everything that was
-filtered out lands in **Rejected (audit)** with the reason. If a good lead was
-wrongly dropped, that sheet names the rule to loosen. Set
-`CONFIG.WRITE_AUDIT_SHEET` to `false` to skip it.
+Results land in a sheet named **AI Remote Leads**, everything filtered out lands
+in **Rejected (audit)** with the reason, and each run appends a line to
+**Run log**.
 
-Adjust `CONFIG` at the top of the file to change the 14-day window or the lead
-count.
+### Twice-daily auto-update
+
+**Reddit Leads → Turn on twice-daily auto-update** installs two time-driven
+triggers (08:00 and 20:00 by default, in the script's timezone). Google will ask
+for one extra authorization the first time, because scheduling and email need
+permissions the manual run does not.
+
+Runs are **append-only**. Each run compares what it found against the post IDs
+already in the sheet and adds only genuinely new leads, at the top, stamped with
+`first_seen`. Running it twice on the same posts adds nothing the second time,
+so the sheet accumulates instead of being rewritten — nothing you have already
+worked is lost.
+
+Already-seen IDs are read back out of the sheet rather than kept in script
+properties, so deleting a row by hand really does forget it, and the two can
+never drift apart.
+
+**Reddit Leads → Auto-update status** reports whether the schedule is live.
+The **Run log** sheet records every run — when, how many posts were scanned, how
+many matched, how many were new — so a silent failure is visible rather than
+looking like a quiet week.
+
+| `CONFIG` key | Default | Meaning |
+| --- | --- | --- |
+| `RUN_HOURS` | `[8, 20]` | hours of the day to run |
+| `MAX_NEW_PER_RUN` | `20` | cap on leads added per run |
+| `KEEP_DAYS` | `30` | drop rows added longer ago than this; `0` keeps everything |
+| `EMAIL_ON_NEW_LEADS` | `false` | email you when new leads land |
+| `EMAIL_TO` | `''` | blank = whoever owns the script |
+| `MAX_AGE_DAYS` | `14` | ignore posts older than this |
+| `WRITE_AUDIT_SHEET` | `true` | write the rejection audit sheet |
+| `SPREADSHEET_ID` | `''` | only needed if the script is not bound to a Sheet |
 
 ## n8n version
 
@@ -185,7 +214,9 @@ The Apps Script port has its own test, which shims the few Google APIs it uses
 so the Atom parsing and filtering can run outside Google:
 
 ```bash
-npm install @xmldom/xmldom && node tests/test_apps_script.js
+npm install @xmldom/xmldom
+node tests/test_apps_script.js   # Atom parsing, filtering, noise rejection
+node tests/test_scheduling.js    # append-only sheet, dedupe across runs, triggers
 ```
 
 34 Python tests cover the demand gate and its noise classes, the

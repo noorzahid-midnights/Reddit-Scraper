@@ -12,11 +12,17 @@
  */
 
 var CONFIG = {
-  MAX_AGE_DAYS: 14,
-  LEAD_COUNT: 20,
+  MAX_AGE_DAYS: 14,           // ignore posts older than this
+  MAX_NEW_PER_RUN: 20,        // cap on leads added per run
+  KEEP_DAYS: 30,              // drop rows added longer ago than this; 0 = keep all
+  RUN_HOURS: [8, 20],         // twice daily, in the script's timezone
   SHEET_NAME: 'AI Remote Leads',
   AUDIT_SHEET_NAME: 'Rejected (audit)',
+  LOG_SHEET_NAME: 'Run log',
   WRITE_AUDIT_SHEET: true,
+  EMAIL_ON_NEW_LEADS: false,  // set true to be emailed when new leads land
+  EMAIL_TO: '',               // blank = the account running the script
+  SPREADSHEET_ID: '',         // only needed if the script is not bound to a Sheet
   REQUEST_DELAY_MS: 1200,
   USER_AGENT: 'web:reddit-ai-leads:1.0 (public feed reader, no account)'
 };
@@ -74,36 +80,68 @@ var TITLE_NOISE = [
   { label: 'seeking work', terms: ['looking for work','looking for a job','seeking opportunities','open to work','my resume','my cv','my portfolio','years of experience','available for hire'] }
 ];
 
-var HEADERS = ['date_posted_utc','days_ago','subreddit','title','lead_type','intent_evidence','work_location',
-               'remote_evidence','pay_or_budget','author','post_url','contact','comments',
-               'lead_score','why_it_matches','snippet'];
+var LEAD_HEADERS = ['date_posted_utc','days_ago','subreddit','title','lead_type','intent_evidence','work_location',
+                    'remote_evidence','pay_or_budget','author','post_url','contact','comments',
+                    'lead_score','why_it_matches','snippet'];
+
+// The sheet also records when each lead was first picked up, which is what
+// makes an append-only, twice-daily sheet readable.
+var SHEET_HEADERS = ['first_seen'].concat(LEAD_HEADERS);
+var URL_INDEX = LEAD_HEADERS.indexOf('post_url');
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Reddit Leads')
-    .addItem('Generate AI remote leads', 'generateLeads')
+    .addItem('Check for new leads now', 'generateLeads')
+    .addSeparator()
+    .addItem('Turn on twice-daily auto-update', 'installTriggers')
+    .addItem('Turn off auto-update', 'removeTriggers')
+    .addItem('Auto-update status', 'autoUpdateStatus')
     .addToUi();
 }
 
-/** Entry point. */
+/**
+ * Entry point, for both the menu and the scheduled runs.
+ *
+ * Appends only leads the sheet has not seen before, so running it twice a day
+ * accumulates new posts instead of rewriting the sheet.
+ */
 function generateLeads() {
+  var startedAt = new Date();
   var posts = fetchAllPosts();
   var result = buildLeads(posts);
-  writeSheet(result.rows);
+
+  var sheet = ensureLeadsSheet();
+  var seen = existingPostIds(sheet);
+
+  var fresh = [];
+  for (var i = 0; i < result.rows.length && fresh.length < CONFIG.MAX_NEW_PER_RUN; i++) {
+    var id = postIdFromUrl(result.rows[i][URL_INDEX]);
+    if (!id || seen[id]) { continue; }
+    seen[id] = true;
+    fresh.push(result.rows[i]);
+  }
+
+  prependLeads(sheet, fresh, startedAt);
+  var pruned = pruneOldLeads(sheet);
   if (CONFIG.WRITE_AUDIT_SHEET) { writeAuditSheet(result.rejected); }
-  var message = posts.length + ' posts scanned, ' + result.stats.unique +
-    ' unique leads found, ' + result.rows.length + ' written.';
+
+  var notes = '';
   if (posts.length === 0) {
-    message += ' No posts came back at all -- HTTP codes: ' +
-      JSON.stringify(FETCH_LOG.byCode) + ' | first body: ' +
-      (FETCH_LOG.sample || '(empty)');
+    notes = 'No posts fetched -- HTTP codes: ' + JSON.stringify(FETCH_LOG.byCode) +
+            ' | first body: ' + (FETCH_LOG.sample || '(empty)');
+  } else if (!fresh.length) {
+    notes = 'No new leads; every match was already in the sheet.';
   }
+
+  logRun([startedAt, posts.length, result.rows.length, fresh.length, pruned, notes]);
+  notifyNewLeads(fresh);
+
+  var message = posts.length + ' posts scanned, ' + result.rows.length + ' matched, ' +
+                fresh.length + ' new added' + (pruned ? ', ' + pruned + ' pruned' : '') +
+                '.' + (notes ? ' ' + notes : '');
   Logger.log(message);
-  try {
-    SpreadsheetApp.getActiveSpreadsheet().toast(message, 'Reddit Leads', 10);
-  } catch (e) {
-    // Running from the editor with no bound spreadsheet open.
-  }
+  toast(message);
   return message;
 }
 
@@ -657,8 +695,10 @@ function buildLeads(posts) {
     unique.push(lead);
   }
 
+  // Return every lead, best first. The caller decides how many are new and
+  // how many to keep - in append mode that is not knowable here.
   var rows = [];
-  for (var r = 0; r < Math.min(CONFIG.LEAD_COUNT, unique.length); r++) {
+  for (var r = 0; r < unique.length; r++) {
     rows.push(unique[r].row);
   }
   return {
@@ -668,26 +708,123 @@ function buildLeads(posts) {
   };
 }
 
-// --- Output -----------------------------------------------------------------
+// --- Spreadsheet access -----------------------------------------------------
 
-function writeSheet(rows) {
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+function getSpreadsheet() {
+  var spreadsheet = null;
+  try {
+    spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  } catch (e) {
+    spreadsheet = null;
+  }
+  if (!spreadsheet && CONFIG.SPREADSHEET_ID) {
+    spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  }
   if (!spreadsheet) {
-    throw new Error('Open this script from a Google Sheet (Extensions > Apps Script).');
+    throw new Error('No spreadsheet available. Open this script from a Google ' +
+                    'Sheet (Extensions > Apps Script), or set CONFIG.SPREADSHEET_ID.');
   }
-  var sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) ||
-              spreadsheet.insertSheet(CONFIG.SHEET_NAME);
-  sheet.clear();
-  sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS])
-       .setFontWeight('bold').setBackground('#d9e8fb');
-  if (rows.length) {
-    sheet.getRange(2, 1, rows.length, HEADERS.length).setValues(rows);
+  return spreadsheet;
+}
+
+function sheetNamed(name) {
+  var spreadsheet = getSpreadsheet();
+  return spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
+}
+
+function toast(message) {
+  // Time-driven runs have no UI; a failed toast must not fail the run.
+  try {
+    getSpreadsheet().toast(message, 'Reddit Leads', 10);
+  } catch (e) {
+    // no-op
   }
-  sheet.setFrozenRows(1);
-  sheet.autoResizeColumns(1, HEADERS.length);
-  sheet.getRange(1, 4).setNote('Post title');
+}
+
+// --- Leads sheet (append-only) ----------------------------------------------
+
+function ensureLeadsSheet() {
+  var sheet = sheetNamed(CONFIG.SHEET_NAME);
+  var headerMatches = false;
+
+  if (sheet.getLastRow() >= 1 && sheet.getLastColumn() === SHEET_HEADERS.length) {
+    var current = sheet.getRange(1, 1, 1, SHEET_HEADERS.length).getValues()[0];
+    headerMatches = current.join('|') === SHEET_HEADERS.join('|');
+  }
+
+  // A sheet written by an older version has different columns; rebuilding it
+  // is the only safe option, since rows would otherwise be misaligned.
+  if (!headerMatches) {
+    sheet.clear();
+    sheet.getRange(1, 1, 1, SHEET_HEADERS.length).setValues([SHEET_HEADERS])
+         .setFontWeight('bold').setBackground('#d9e8fb');
+    sheet.setFrozenRows(1);
+    sheet.autoResizeColumns(1, SHEET_HEADERS.length);
+  }
   return sheet;
 }
+
+/** "https://www.reddit.com/r/x/comments/abc123/slug/" -> "abc123" */
+function postIdFromUrl(url) {
+  var match = String(url || '').match(/\/comments\/([a-z0-9]+)/i);
+  return match ? match[1] : '';
+}
+
+/**
+ * Which posts the sheet already holds.
+ *
+ * Read back from the sheet rather than kept in script properties, so it stays
+ * correct when rows are deleted by hand and cannot drift out of sync.
+ */
+function existingPostIds(sheet) {
+  var ids = {};
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) { return ids; }
+
+  var column = SHEET_HEADERS.indexOf('post_url') + 1;
+  var values = sheet.getRange(2, column, lastRow - 1, 1).getValues();
+  for (var i = 0; i < values.length; i++) {
+    var id = postIdFromUrl(values[i][0]);
+    if (id) { ids[id] = true; }
+  }
+  return ids;
+}
+
+/** New leads go directly under the header, so the newest are always on top. */
+function prependLeads(sheet, rows, stamp) {
+  if (!rows.length) { return; }
+  sheet.insertRowsAfter(1, rows.length);
+  var values = [];
+  for (var i = 0; i < rows.length; i++) {
+    values.push([stamp].concat(rows[i]));
+  }
+  sheet.getRange(2, 1, values.length, SHEET_HEADERS.length).setValues(values);
+  sheet.getRange(2, 1, values.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+}
+
+/** Stop the sheet growing without bound. */
+function pruneOldLeads(sheet) {
+  if (!CONFIG.KEEP_DAYS) { return 0; }
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) { return 0; }
+
+  var stamps = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var cutoff = Date.now() - CONFIG.KEEP_DAYS * 86400000;
+  var removed = 0;
+
+  // Bottom-up, so deleting a row does not shift the ones still to check.
+  for (var i = stamps.length - 1; i >= 0; i--) {
+    var value = stamps[i][0];
+    var ms = (value instanceof Date) ? value.getTime() : Date.parse(value);
+    if (ms && ms < cutoff) {
+      sheet.deleteRow(i + 2);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+// --- Audit and log sheets ---------------------------------------------------
 
 /**
  * Everything that was filtered out, with the reason. Use it to check the
@@ -695,10 +832,7 @@ function writeSheet(rows) {
  * which rule to loosen.
  */
 function writeAuditSheet(rejected) {
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  if (!spreadsheet) { return null; }
-  var sheet = spreadsheet.getSheetByName(CONFIG.AUDIT_SHEET_NAME) ||
-              spreadsheet.insertSheet(CONFIG.AUDIT_SHEET_NAME);
+  var sheet = sheetNamed(CONFIG.AUDIT_SHEET_NAME);
   sheet.clear();
   var headers = ['subreddit', 'title', 'rejected_because', 'post_url'];
   sheet.getRange(1, 1, 1, headers.length).setValues([headers])
@@ -709,4 +843,100 @@ function writeAuditSheet(rejected) {
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, headers.length);
   return sheet;
+}
+
+/** One row per run, so an unattended job cannot fail silently. */
+function logRun(entry) {
+  var sheet = sheetNamed(CONFIG.LOG_SHEET_NAME);
+  var headers = ['when', 'posts_scanned', 'leads_matched', 'new_added', 'pruned', 'notes'];
+
+  if (sheet.getLastRow() < 1 || sheet.getLastColumn() !== headers.length) {
+    sheet.clear();
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers])
+         .setFontWeight('bold').setBackground('#e4f0e4');
+    sheet.setFrozenRows(1);
+  }
+
+  sheet.insertRowAfter(1);
+  sheet.getRange(2, 1, 1, headers.length).setValues([entry]);
+  sheet.getRange(2, 1, 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 201) { sheet.deleteRows(202, lastRow - 201); }
+  return sheet;
+}
+
+function notifyNewLeads(rows) {
+  if (!CONFIG.EMAIL_ON_NEW_LEADS || !rows.length) { return; }
+  var to = CONFIG.EMAIL_TO || Session.getEffectiveUser().getEmail();
+  if (!to) { return; }
+
+  var titleAt = LEAD_HEADERS.indexOf('title');
+  var subAt = LEAD_HEADERS.indexOf('subreddit');
+  var payAt = LEAD_HEADERS.indexOf('pay_or_budget');
+
+  var lines = [];
+  for (var i = 0; i < rows.length; i++) {
+    lines.push('- ' + rows[i][titleAt] +
+               ' (' + rows[i][subAt] + ', ' + rows[i][payAt] + ')\n  ' +
+               rows[i][URL_INDEX]);
+  }
+
+  MailApp.sendEmail(to,
+    rows.length + ' new AI remote lead' + (rows.length === 1 ? '' : 's'),
+    lines.join('\n\n'));
+}
+
+// --- Scheduling -------------------------------------------------------------
+
+/** Install the twice-daily runs. Safe to call again; it replaces its own. */
+function installTriggers() {
+  removeTriggers();
+  for (var i = 0; i < CONFIG.RUN_HOURS.length; i++) {
+    ScriptApp.newTrigger('generateLeads')
+             .timeBased()
+             .atHour(CONFIG.RUN_HOURS[i])
+             .everyDays(1)
+             .create();
+  }
+  var message = 'Auto-update on: runs daily near ' + CONFIG.RUN_HOURS.join(':00 and ') +
+                ':00 (' + Session.getScriptTimeZone() + ').';
+  Logger.log(message);
+  toast(message);
+  return message;
+}
+
+function removeTriggers() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  // Backwards, so removal can never disturb the iteration.
+  for (var i = triggers.length - 1; i >= 0; i--) {
+    if (triggers[i].getHandlerFunction() === 'generateLeads') {
+      ScriptApp.deleteTrigger(triggers[i]);
+      removed++;
+    }
+  }
+  var message = removed ? 'Auto-update off (' + removed + ' trigger(s) removed).'
+                        : 'Auto-update was not on.';
+  Logger.log(message);
+  return message;
+}
+
+function autoUpdateStatus() {
+  var triggers = ScriptApp.getProjectTriggers();
+  var count = 0;
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'generateLeads') { count++; }
+  }
+  var message = count
+    ? count + ' scheduled run(s) installed, near ' + CONFIG.RUN_HOURS.join(':00 and ') +
+      ':00 ' + Session.getScriptTimeZone() + '. See the "' + CONFIG.LOG_SHEET_NAME + '" sheet.'
+    : 'Auto-update is off. Use "Turn on twice-daily auto-update".';
+  Logger.log(message);
+  try {
+    SpreadsheetApp.getUi().alert(message);
+  } catch (e) {
+    toast(message);
+  }
+  return message;
 }
