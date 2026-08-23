@@ -16,6 +16,7 @@ var CONFIG = {
   LEAD_COUNT: 20,
   SHEET_NAME: 'AI Remote Leads',
   REQUEST_DELAY_MS: 1200,
+  TRY_OLD_REDDIT: true,
   USER_AGENT: 'web:reddit-ai-leads:1.0 (public JSON reader, no account)'
 };
 
@@ -64,6 +65,11 @@ function generateLeads() {
   writeSheet(result.rows);
   var message = posts.length + ' posts scanned, ' + result.stats.unique +
     ' unique leads found, ' + result.rows.length + ' written.';
+  if (posts.length === 0) {
+    message += ' No posts came back at all -- HTTP codes: ' +
+      JSON.stringify(FETCH_LOG.byCode) + ' | first body: ' +
+      (FETCH_LOG.sample || '(empty)');
+  }
   Logger.log(message);
   try {
     SpreadsheetApp.getActiveSpreadsheet().toast(message, 'Reddit Leads', 10);
@@ -99,35 +105,152 @@ function buildUrls() {
   return urls;
 }
 
-function fetchJson(url) {
-  for (var attempt = 0; attempt < 3; attempt++) {
-    var response = UrlFetchApp.fetch(url, {
-      muteHttpExceptions: true,
-      headers: { 'User-Agent': CONFIG.USER_AGENT, 'Accept': 'application/json' }
-    });
-    var code = response.getResponseCode();
-    if (code === 200) {
-      try {
-        return JSON.parse(response.getContentText());
-      } catch (e) {
-        return null;
-      }
-    }
-    if (code !== 429 && code < 500) {
-      return null;
-    }
-    Utilities.sleep(CONFIG.REQUEST_DELAY_MS * Math.pow(2, attempt + 1));
+/** Per-run record of what Reddit actually answered, so a zero-result run
+ *  reports the reason instead of silently writing an empty sheet. */
+var FETCH_LOG = { ok: 0, failed: 0, byCode: {}, sample: '' };
+
+function noteCode(code) {
+  FETCH_LOG.byCode[code] = (FETCH_LOG.byCode[code] || 0) + 1;
+}
+
+function noteSample(body) {
+  if (!FETCH_LOG.sample) {
+    FETCH_LOG.sample = String(body || '').replace(/\s+/g, ' ').slice(0, 300);
   }
+}
+
+function httpGet(url) {
+  return UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    followRedirects: true,
+    headers: {
+      'User-Agent': CONFIG.USER_AGENT,
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9'
+    }
+  });
+}
+
+/**
+ * Fetch one Reddit JSON URL.
+ *
+ * Reddit rate-limits and sometimes outright blocks datacenter IP ranges,
+ * which is what Apps Script requests come from. When www.reddit.com refuses,
+ * old.reddit.com is tried as well - it is served by a different stack and is
+ * often more permissive.
+ */
+function fetchJson(url) {
+  var variants = [url];
+  if (CONFIG.TRY_OLD_REDDIT && url.indexOf('://www.reddit.com') !== -1) {
+    variants.push(url.replace('://www.reddit.com', '://old.reddit.com'));
+  }
+
+  for (var v = 0; v < variants.length; v++) {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      var response;
+      try {
+        response = httpGet(variants[v]);
+      } catch (e) {
+        noteCode('exception');
+        noteSample(e.message);
+        break;
+      }
+
+      var code = response.getResponseCode();
+      noteCode(code);
+
+      if (code === 200) {
+        var body = response.getContentText();
+        try {
+          var parsed = JSON.parse(body);
+          FETCH_LOG.ok++;
+          return parsed;
+        } catch (e) {
+          // HTTP 200 carrying HTML means an interstitial or block page.
+          noteSample(body);
+          break;
+        }
+      }
+
+      if (code === 429 || code >= 500) {
+        Utilities.sleep(CONFIG.REQUEST_DELAY_MS * Math.pow(2, attempt + 1));
+        continue;
+      }
+
+      noteSample(response.getContentText());
+      break;
+    }
+  }
+
+  FETCH_LOG.failed++;
   return null;
+}
+
+/**
+ * Diagnostic: run this on its own to see exactly what Reddit answers.
+ * Check View > Logs afterwards.
+ */
+function testFetch() {
+  var urls = [
+    'https://www.reddit.com/r/forhire/new.json?limit=5&raw_json=1',
+    'https://old.reddit.com/r/forhire/new.json?limit=5&raw_json=1',
+    'https://www.reddit.com/r/forhire/new.rss?limit=5'
+  ];
+  var lines = [];
+  for (var i = 0; i < urls.length; i++) {
+    var line;
+    try {
+      var response = httpGet(urls[i]);
+      var body = response.getContentText();
+      var children = -1;
+      try {
+        children = ((JSON.parse(body).data || {}).children || []).length;
+      } catch (e) {
+        children = -1;
+      }
+      line = urls[i] + '\n    HTTP ' + response.getResponseCode() +
+             ' | bytes ' + body.length + ' | posts parsed ' + children +
+             '\n    body: ' + body.replace(/\s+/g, ' ').slice(0, 250);
+    } catch (e) {
+      line = urls[i] + '\n    EXCEPTION: ' + e.message;
+    }
+    lines.push(line);
+    Utilities.sleep(1500);
+  }
+  var report = lines.join('\n\n');
+  Logger.log(report);
+  return report;
 }
 
 function fetchAllPosts() {
   var urls = buildUrls();
   var posts = [];
   var seen = {};
+  var consecutiveFailures = 0;
+
+  FETCH_LOG = { ok: 0, failed: 0, byCode: {}, sample: '' };
+
   for (var i = 0; i < urls.length; i++) {
     var payload = fetchJson(urls[i]);
-    var children = (payload && payload.data && payload.data.children) || [];
+
+    if (!payload) {
+      consecutiveFailures++;
+      // Six failures in a row is a block, not bad luck. Stop rather than
+      // spend the whole Apps Script quota discovering that 50 more times.
+      if (consecutiveFailures >= 6) {
+        throw new Error(
+          'Reddit refused the first ' + consecutiveFailures + ' requests, so no ' +
+          'leads could be collected. Response codes: ' + JSON.stringify(FETCH_LOG.byCode) +
+          ' | first response body: ' + (FETCH_LOG.sample || '(empty)') +
+          ' -- Reddit blocks or throttles requests from datacenter IP ranges, which is ' +
+          'where Apps Script runs. Run the Python version from your own machine instead.');
+      }
+      Utilities.sleep(CONFIG.REQUEST_DELAY_MS);
+      continue;
+    }
+
+    consecutiveFailures = 0;
+    var children = (payload.data && payload.data.children) || [];
     for (var c = 0; c < children.length; c++) {
       var post = children[c].data;
       if (post && post.id && !seen[post.id]) {
