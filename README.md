@@ -1,0 +1,151 @@
+# Reddit AI Leads
+
+Finds **recent, remote, paid AI work** on Reddit — job posts and one-off AI
+projects — and writes them to a CSV (or straight into a Google Sheet).
+
+No Reddit account, no app registration, no OAuth token, no API key. Every
+Reddit listing answers on `.json`, and that is all this reads.
+
+## Quick start
+
+```bash
+git clone https://github.com/noorzahid-midnights/Reddit-Scraper.git
+cd Reddit-Scraper
+python3 -m reddit_leads
+```
+
+That writes `leads.csv` with the top 20 leads. Nothing to install — the tool is
+Python 3.8+ standard library only.
+
+```bash
+python3 -m reddit_leads --limit 40 --days 7 --out this_week.csv
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-n, --limit` | `20` | how many leads to return |
+| `-d, --days` | `14` | maximum post age |
+| `-o, --out` | `leads.csv` | output path |
+| `--delay` | `2.0` | seconds between requests (raise if rate-limited) |
+| `--save-raw PATH` | – | also dump every fetched post as JSON |
+| `--from-json PATH` | – | re-score a saved dump without re-fetching |
+
+A full run makes 56 requests and takes roughly two minutes.
+
+## What counts as a lead
+
+A post has to clear every one of these:
+
+1. **Posted within the last 14 days.** Anything older is dropped, and so is
+   anything with a future timestamp.
+2. **About AI work.** Matching is word-boundary based, so `AI` matches "AI" but
+   not "s**ai**d" or "m**ai**ntain". Strong terms (`langchain`, `llm`, `rag`,
+   `computer vision`, …) qualify a post on their own; weak ones (`python`,
+   `automation`) only count when two or more appear together.
+3. **Someone hiring, not someone advertising.** `[FOR HIRE]` posts, portfolio
+   drops and "hire me" posts are excluded — those are competitors, not leads.
+4. **Remote, strictly.** See below.
+5. **Not a duplicate.** See below.
+
+### The remote rule
+
+Two independent gates, because "didn't mention an office" is not the same as
+"is remote":
+
+- **Any live onsite marker disqualifies the post** — `onsite`, `on-site`,
+  `hybrid`, `in person`, `must be located`, `must reside`, `relocate`,
+  `commute`, `days in office`, `our office`, and similar.
+- The marker is ignored when it is **negated**: "remote, **no** onsite",
+  "**not** hybrid", "**without** relocation" all stay in the results. This is
+  what stops the filter from throwing away good leads that mention the word
+  only to rule it out.
+- After that, the post still needs **positive remote evidence** — an explicit
+  `remote` / `work from home` / `worldwide` / `any timezone` statement, or
+  membership of a subreddit whose own rules make every post remote
+  (`r/RemoteJobs`, `r/remotejs`, `r/WorkOnline`, `r/jobbit`). Silence is not
+  treated as remote.
+
+### Deduplication
+
+The same gig arrives several times: one post is returned by several queries,
+and posters re-post the same ad every few days under a new ID. Four identities
+are checked:
+
+| Key | Catches |
+| --- | --- |
+| post ID | the same post returned by two different queries |
+| author + title fingerprint | one poster re-posting their ad |
+| title fingerprint alone | copy-paste ads from different accounts |
+| external link | the same job board URL posted twice |
+
+The fingerprint is the set of meaningful words in the title, sorted, so word
+order and filler words do not defeat it. The title-only key needs at least four
+distinctive words before it fires — otherwise two unrelated clients both
+posting "Looking for an AI developer" would collapse into one lead.
+
+When duplicates collide, the highest-scoring copy survives.
+
+### Ranking
+
+Leads are sorted by a score built from: AI relevance, hiring intent (stronger
+when it is in the title), whether a budget is stated, freshness inside the
+14-day window, whether remote is stated in the title, post length, and comment
+count. Every lead carries a `why_it_matches` column showing exactly which
+signals fired, so you can audit or re-tune the ranking.
+
+## Output columns
+
+`date_posted_utc`, `days_ago`, `subreddit`, `title`, `lead_type` (job vs
+project/gig), `work_location`, `remote_evidence`, `pay_or_budget`, `author`,
+`post_url`, `contact`, `comments`, `lead_score`, `why_it_matches`, `snippet`.
+
+The CSV is UTF-8 with a BOM, so it opens correctly in Excel and imports into
+Google Sheets without mangling non-ASCII characters.
+
+## Google Sheets version
+
+`google_apps_script/RedditLeads.gs` runs the same rules inside Google Sheets,
+with no local Python at all — Google's servers do the fetching.
+
+1. Open <https://sheets.new>
+2. **Extensions → Apps Script**
+3. Delete the placeholder, paste the contents of `RedditLeads.gs`, **Save**
+4. Run `generateLeads` once and approve the permission prompt
+5. Reload the sheet — a **Reddit Leads** menu appears; use it any time
+
+Results land in a sheet named **AI Remote Leads**. Adjust `CONFIG` at the top
+of the file to change the 14-day window or the lead count.
+
+## n8n version
+
+A workflow doing the same fetching and filtering has been created in your n8n
+account, and needs no credentials because the endpoints are public. See
+[`n8n/README.md`](n8n/README.md) for the link, the node structure, and how to
+export it into this repo.
+
+Note that n8n refuses to execute any workflow while the account's trial or plan
+is inactive. The Python CLI and the Apps Script version have no such
+dependency.
+
+## Tuning
+
+Everything you would want to change lives in `reddit_leads/config.py`:
+subreddits, search queries, keyword vocabularies, the onsite/negation lists,
+and the request delay. Adding a subreddit is one line.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+22 tests cover the onsite/negation logic, the AI-term false-positive guards,
+the recency window, self-promo exclusion, all four dedupe keys, and the
+end-to-end pipeline.
+
+## Rate limits
+
+Reddit throttles unauthenticated clients. The client sends a descriptive
+User-Agent, waits 2 seconds between requests, and backs off exponentially on
+`429` and `5xx`. If you still get throttled, raise `--delay`. Individual source
+failures are reported and skipped rather than aborting the run.
