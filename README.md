@@ -199,6 +199,14 @@ Set `MIRROR_SPREADSHEET_ID` to the ID from the other spreadsheet's URL
 its new leads there too. The account running the script needs edit access to
 it, so share it if the two live in different accounts.
 
+It is left blank here on purpose. A spreadsheet ID is not a password, but it is
+the whole address of the document: anyone who has it can open the sheet if its
+sharing is set to "anyone with the link". Keep it in your copy of the script
+rather than in a public repository.
+
+New leads land in a tab named **AI Remote Leads**, which the script creates in
+the mirror spreadsheet on the first run. Existing tabs are left alone.
+
 The mirror is a real copy, not a formula: it is checked against its own
 contents, so deleting a row there does not bring it back, and it is never
 pruned. Notes you add in spare columns to the right stay attached to their row
