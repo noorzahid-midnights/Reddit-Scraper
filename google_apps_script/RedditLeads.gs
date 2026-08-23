@@ -102,6 +102,8 @@ function onOpen() {
     .addItem('Turn on twice-daily auto-update', 'installTriggers')
     .addItem('Turn off auto-update', 'removeTriggers')
     .addItem('Auto-update status', 'autoUpdateStatus')
+    .addSeparator()
+    .addItem('Sync mirror sheet now', 'syncMirrorNow')
     .addToUi();
 }
 
@@ -136,7 +138,7 @@ function generateLeads() {
   var mirrored = 0;
   if (CONFIG.MIRROR_SPREADSHEET_ID) {
     try {
-      mirrored = mirrorNewLeads(fresh, startedAt);
+      mirrored = syncMirror();
     } catch (e) {
       // A broken mirror must not lose the run's real work.
       notes = 'Mirror failed: ' + e.message + '. ';
@@ -808,18 +810,13 @@ function existingPostIds(sheet) {
   return ids;
 }
 
-/** New leads go directly under the header, so the newest are always on top. */
-function prependLeads(sheet, rows, stamp) {
-  if (!rows.length) { return; }
-  sheet.insertRowsAfter(1, rows.length);
+/** Write whole sheet rows under the header, newest on top. */
+function prependRows(sheet, fullRows) {
+  if (!fullRows.length) { return; }
+  sheet.insertRowsAfter(1, fullRows.length);
 
-  var values = [];
-  for (var i = 0; i < rows.length; i++) {
-    values.push([stamp].concat(rows[i]));
-  }
-
-  var range = sheet.getRange(2, 1, values.length, SHEET_HEADERS.length);
-  range.setValues(values);
+  var range = sheet.getRange(2, 1, fullRows.length, SHEET_HEADERS.length);
+  range.setValues(fullRows);
 
   // A row inserted directly beneath the header inherits the header's
   // formatting, which is why new leads arrived bold and shaded. Reset it.
@@ -828,31 +825,70 @@ function prependLeads(sheet, rows, stamp) {
        .setBackground(null)
        .setFontColor(null);
 
-  sheet.getRange(2, 1, values.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+  sheet.getRange(2, 1, fullRows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+}
+
+/** New leads go directly under the header, stamped with when we found them. */
+function prependLeads(sheet, rows, stamp) {
+  var full = [];
+  for (var i = 0; i < rows.length; i++) {
+    full.push([stamp].concat(rows[i]));
+  }
+  prependRows(sheet, full);
 }
 
 /**
- * Copy new leads into a second spreadsheet, if one is configured.
+ * Bring the mirror spreadsheet up to date with the main sheet.
  *
- * The mirror is checked against its own contents, so deleting a row there
- * does not resurrect it from the main sheet, and it is never pruned - it is
- * your working copy, and notes you add in spare columns travel with their row
- * when later leads push it down.
+ * This compares the two sheets rather than copying whatever the current run
+ * happened to find. Copying only the run's new leads left the mirror
+ * permanently empty whenever the main sheet was already up to date - which is
+ * the normal case, since most runs find nothing new.
+ *
+ * Rows are copied verbatim, keeping their original first_seen, so the mirror
+ * reads the same as the source. It is never pruned, and notes added in spare
+ * columns to the right travel with their row as later leads push it down.
+ *
+ * Because it reconciles against the source, a row deleted from the mirror
+ * comes back on the next run. To set a lead aside, mark it in a spare column
+ * instead of deleting it.
  */
-function mirrorNewLeads(rows, stamp) {
-  if (!CONFIG.MIRROR_SPREADSHEET_ID || !rows.length) { return 0; }
+function syncMirror() {
+  if (!CONFIG.MIRROR_SPREADSHEET_ID) { return 0; }
 
-  var sheet = ensureLeadsSheet(SpreadsheetApp.openById(CONFIG.MIRROR_SPREADSHEET_ID));
-  var seen = existingPostIds(sheet);
+  var source = ensureLeadsSheet();
+  var lastRow = source.getLastRow();
+  if (lastRow < 2) { return 0; }
 
-  var unseen = [];
+  var mirror = ensureLeadsSheet(SpreadsheetApp.openById(CONFIG.MIRROR_SPREADSHEET_ID));
+  var alreadyThere = existingPostIds(mirror);
+  var urlColumn = SHEET_HEADERS.indexOf('post_url');
+
+  var rows = source.getRange(2, 1, lastRow - 1, SHEET_HEADERS.length).getValues();
+  var missing = [];
   for (var i = 0; i < rows.length; i++) {
-    var id = postIdFromUrl(rows[i][URL_INDEX]);
-    if (id && !seen[id]) { unseen.push(rows[i]); }
+    var id = postIdFromUrl(rows[i][urlColumn]);
+    if (id && !alreadyThere[id]) { missing.push(rows[i]); }
   }
 
-  prependLeads(sheet, unseen, stamp);
-  return unseen.length;
+  prependRows(mirror, missing);
+  return missing.length;
+}
+
+/** Menu action: copy anything the mirror is missing, without fetching. */
+function syncMirrorNow() {
+  if (!CONFIG.MIRROR_SPREADSHEET_ID) {
+    var warning = 'No mirror configured. Set CONFIG.MIRROR_SPREADSHEET_ID first.';
+    Logger.log(warning);
+    toast(warning);
+    return warning;
+  }
+  var copied = syncMirror();
+  var message = copied ? copied + ' lead(s) copied to the mirror.'
+                       : 'Mirror already had every lead.';
+  Logger.log(message);
+  toast(message);
+  return message;
 }
 
 /** Stop the sheet growing without bound. */

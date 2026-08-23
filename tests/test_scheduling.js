@@ -111,11 +111,25 @@ CONFIG.MIRROR_SPREADSHEET_ID = 'mirror-id';
 const batch3 = batch2.concat([
   mk('eee555','forhire','c5','[Hiring] Remote RAG engineer','Fully remote. Budget $9,000. DM me. '+'more '.repeat(60),1),
 ]);
+// The mirror is switched on when the main sheet already holds 4 leads, so it
+// must back-fill them, not just copy the one lead this run found.
+console.log('main rows before mirror is enabled:', s1.getLastRow()-1);
 console.log('run 4 (mirror on, 1 new):', runWith(batch3));
 const m1 = mirrorSheets['AI Remote Leads'];
-console.log('  mirror rows:', m1 ? m1.getLastRow()-1 : 0);
+const mirrorRows = m1 ? m1.getLastRow()-1 : 0;
+console.log('  mirror rows:', mirrorRows, '| main rows:', s1.getLastRow()-1);
+console.log('  back-filled the pre-existing leads:', mirrorRows === s1.getLastRow()-1);
+
 console.log('run 5 (nothing new):', runWith(batch3));
-console.log('  mirror rows after re-run:', m1.getLastRow()-1);
+console.log('  mirror rows after re-run:', m1.getLastRow()-1, '(must not duplicate)');
+const noDupes = m1.getLastRow()-1 === mirrorRows;
+
+// first_seen must be carried across, not restamped, so the mirror reads the
+// same as the source.
+const srcFirstSeen = s1.getRange(2,1,1,1).getValues()[0][0];
+const mirFirstSeen = m1.getRange(2,1,1,1).getValues()[0][0];
+const stampsMatch = String(srcFirstSeen) === String(mirFirstSeen);
+console.log('  first_seen carried across:', stampsMatch);
 
 console.log('\n=== mirror failure must not break the run ===');
 CONFIG.MIRROR_SPREADSHEET_ID = 'bad-id';
@@ -125,6 +139,7 @@ const batch4 = batch3.concat([
 const msg = runWith(batch4);
 console.log('  run still completed:', msg.indexOf('posts scanned') !== -1);
 console.log('  failure reported:', msg.indexOf('Mirror failed') !== -1);
+console.log('  lead still added to main sheet:', msg.indexOf('1 new added') !== -1);
 CONFIG.MIRROR_SPREADSHEET_ID = '';
 
 // Fail loudly rather than just printing, so this is usable in CI.
@@ -137,7 +152,10 @@ if (finalUrls.length !== 6) { problems.push('expected 6 rows at the end, got ' +
 if (triggers.length !== 0) { problems.push('triggers not cleaned up'); }
 if (boldData.length) { problems.push('data rows were left bold'); }
 if (!normalData.length) { problems.push('data rows never reset to normal weight'); }
-if (!m1 || m1.getLastRow() - 1 !== 1) { problems.push('mirror did not receive exactly 1 lead'); }
+if (!m1 || mirrorRows !== 5) { problems.push('mirror did not back-fill all 5 leads, got ' + mirrorRows); }
+if (!noDupes) { problems.push('mirror duplicated rows on re-run'); }
+if (!stampsMatch) { problems.push('first_seen was restamped instead of carried across'); }
+if (msg.indexOf('1 new added') === -1) { problems.push('a failing mirror blocked the main sheet write'); }
 if (msg.indexOf('Mirror failed') === -1) { problems.push('mirror failure not reported'); }
 if (problems.length) { console.error('\nFAILURES:\n - ' + problems.join('\n - ')); process.exitCode = 1; }
 else { console.log('\nAll scheduling checks passed.'); }

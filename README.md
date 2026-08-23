@@ -207,11 +207,20 @@ rather than in a public repository.
 New leads land in a tab named **AI Remote Leads**, which the script creates in
 the mirror spreadsheet on the first run. Existing tabs are left alone.
 
-The mirror is a real copy, not a formula: it is checked against its own
-contents, so deleting a row there does not bring it back, and it is never
-pruned. Notes you add in spare columns to the right stay attached to their row
-as later leads push it down — which is the point, if the mirror is where you
-actually work the leads.
+The mirror is a real copy, not a formula. Every run reconciles it against the
+main sheet and copies whatever it is missing, so switching it on part-way
+back-fills the leads already collected. Rows are copied verbatim, keeping their
+original `first_seen`, so the mirror reads the same as the source, and it is
+never pruned. Notes you add in spare columns to the right stay attached to
+their row as later leads push it down — which is the point, if the mirror is
+where you actually work the leads.
+
+Because it reconciles against the source, **a row deleted from the mirror comes
+back on the next run**. To set a lead aside, mark it in a spare column rather
+than deleting it.
+
+**Reddit Leads → Sync mirror sheet now** copies anything missing without
+fetching from Reddit, which is the quick way to test the setup.
 
 A mirror that fails (wrong ID, no access) is reported in the run log and the
 run continues; it can never cost you the leads themselves.
