@@ -1,14 +1,30 @@
 /**
  * Reddit AI lead generator for Google Sheets.
  *
- * Fetches Reddit's public JSON API from Google's servers - no Reddit account,
- * no API key, no OAuth. Same rules as the Python version: AI-related, hiring
- * intent, remote only (onsite/hybrid excluded), posted within MAX_AGE_DAYS,
- * deduplicated, ranked, top N written to a sheet.
+ * Finds recent, remote, paid AI work on Reddit - jobs and one-off projects -
+ * and appends them to a sheet. No Reddit account, API key or OAuth: it reads
+ * Reddit's public Atom feeds, which are served normally to Google's servers
+ * (the .json API answers 403 to datacenter IPs, which is where Apps Script
+ * runs).
  *
- * Setup: sheets.new -> Extensions -> Apps Script -> paste this file -> Save ->
- * Run `generateLeads`, approve the one-time permission prompt, then reload the
- * sheet to get the "Reddit Leads" menu.
+ * A post becomes a lead only if it is within MAX_AGE_DAYS, is about AI work,
+ * comes from someone hiring rather than advertising or discussing, and is
+ * remote with no onsite or hybrid marker. There is no cap on how many leads
+ * come back - the filters decide.
+ *
+ * Setup
+ *   1. sheets.new -> Extensions -> Apps Script
+ *   2. Replace everything in Code.gs with this file, then Save (Ctrl/Cmd+S).
+ *      The function dropdown only refreshes once the file is saved.
+ *   3. Run `generateLeads` and approve the permission prompt.
+ *   4. Reload the sheet to get the "Reddit Leads" menu.
+ *
+ * Entry points
+ *   generateLeads   fetch, filter and append new leads (also the scheduled run)
+ *   installTriggers turn on the twice-daily schedule
+ *   removeTriggers  turn it off
+ *   syncMirrorNow   copy anything missing into the mirror spreadsheet
+ *   testFetch       diagnose what Reddit is actually returning
  */
 
 var CONFIG = {
