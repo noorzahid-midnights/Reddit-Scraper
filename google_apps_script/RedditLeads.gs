@@ -39,7 +39,7 @@ var CONFIG = {
   EMAIL_ON_NEW_LEADS: false,  // set true to be emailed when new leads land
   EMAIL_TO: '',               // blank = the account running the script
   SPREADSHEET_ID: '',         // only needed if the script is not bound to a Sheet
-  MIRROR_SPREADSHEET_ID: '',  // 2nd spreadsheet to copy new leads into; see README
+  MIRROR_SPREADSHEET_ID: '',  // optional: ID of a 2nd spreadsheet to copy leads into
   REQUEST_DELAY_MS: 1200,
   USER_AGENT: 'web:reddit-ai-leads:1.0 (public feed reader, no account)'
 };

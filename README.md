@@ -190,61 +190,6 @@ looking like a quiet week.
 | `MAX_AGE_DAYS` | `14` | ignore posts older than this |
 | `WRITE_AUDIT_SHEET` | `true` | write the rejection audit sheet |
 | `SPREADSHEET_ID` | `''` | only needed if the script is not bound to a Sheet |
-| `MIRROR_SPREADSHEET_ID` | `''` | second spreadsheet to copy new leads into |
-
-### Mirroring into a second spreadsheet
-
-Set `MIRROR_SPREADSHEET_ID` to the ID from the other spreadsheet's URL
-(`docs.google.com/spreadsheets/d/`**`THIS_PART`**`/edit`). Every run then copies
-its new leads there too. The account running the script needs edit access to
-it, so share it if the two live in different accounts.
-
-It is left blank here on purpose. A spreadsheet ID is not a password, but it is
-the whole address of the document: anyone who has it can open the sheet if its
-sharing is set to "anyone with the link". Keep it in your copy of the script
-rather than in a public repository.
-
-New leads land in a tab named **AI Remote Leads**, which the script creates in
-the mirror spreadsheet on the first run. Existing tabs are left alone.
-
-The mirror is a real copy, not a formula. Every run reconciles it against the
-main sheet and copies whatever it is missing, so switching it on part-way
-back-fills the leads already collected. Rows are copied verbatim, keeping their
-original `first_seen`, so the mirror reads the same as the source, and it is
-never pruned. Notes you add in spare columns to the right stay attached to
-their row as later leads push it down — which is the point, if the mirror is
-where you actually work the leads.
-
-Because it reconciles against the source, **a row deleted from the mirror comes
-back on the next run**. To set a lead aside, mark it in a spare column rather
-than deleting it.
-
-**Reddit Leads → Sync mirror sheet now** copies anything missing without
-fetching from Reddit, which is the quick way to test the setup.
-
-A mirror that fails (wrong ID, no access) is reported in the run log and the
-run continues; it can never cost you the leads themselves.
-
-If you only want to *read* the leads elsewhere and never annotate them, skip
-all of this and put a formula in the other sheet instead:
-
-```
-=IMPORTRANGE("<source spreadsheet URL>", "AI Remote Leads!A:Q")
-```
-
-That needs no code and updates itself, but the range is read-only — anything
-you type into it is overwritten.
-
-## n8n version
-
-A workflow doing the same fetching and filtering has been created in your n8n
-account, and needs no credentials because the endpoints are public. See
-[`n8n/README.md`](n8n/README.md) for the link, the node structure, and how to
-export it into this repo.
-
-Note that n8n refuses to execute any workflow while the account's trial or plan
-is inactive. The Python CLI and the Apps Script version have no such
-dependency.
 
 ## Tuning
 

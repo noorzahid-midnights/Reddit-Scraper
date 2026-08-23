@@ -1,12 +1,9 @@
 # n8n version
 
-A ready-made workflow, **Reddit AI Leads Fetcher**, has been created in your
-n8n account:
-
-<<your n8n workflow URL>>
-
-To keep a copy in this repo, open it and use the workflow menu (**⋯ →
-Download**), then save the file here as `reddit-ai-leads.json`.
+A workflow named **Reddit AI Leads Fetcher** does the same fetching and
+filtering inside n8n. Build it from the structure below, or export an existing
+one from your own n8n instance (workflow menu **⋯ → Download**) and save it here
+as `reddit-ai-leads.json` to keep a copy in the repo.
 
 ## Structure
 
