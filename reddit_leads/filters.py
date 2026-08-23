@@ -164,3 +164,101 @@ def age_days(created_utc, now=None):
 def is_recent(created_utc, max_age_days=config.DEFAULT_MAX_AGE_DAYS, now=None):
     age = age_days(created_utc, now)
     return 0 <= age <= max_age_days
+
+
+# --- Demand intent -----------------------------------------------------------
+
+HIRING_TAG_RE = re.compile(r"^\s*[\[\(]?\s*hiring\b|\[\s*hiring\s*\]|\(\s*hiring\s*\)",
+                           re.IGNORECASE)
+
+
+def has_hiring_tag(title):
+    """True for [Hiring]-tagged or "Hiring: ..."-style titles."""
+    return bool(HIRING_TAG_RE.search(normalize(title)))
+
+
+def demand_patterns(text):
+    """A seek verb followed closely by a role noun.
+
+    Catches "looking for a remote n8n automation freelancer", which no fixed
+    phrase can match because of the words wedged in the middle.
+    """
+    found = []
+    for verb in config.DEMAND_SEEK_VERBS:
+        for match in _pattern(verb).finditer(text):
+            window = text[match.end():match.end() + config.DEMAND_WINDOW_CHARS]
+            roles = find_terms(window, config.DEMAND_ROLE_NOUNS)
+            if roles:
+                found.append("%s ... %s" % (verb, roles[0]))
+                break
+    return found
+
+
+def demand_signals(text):
+    """Phrases showing the poster is themselves hiring or commissioning work."""
+    return find_terms(text, config.DEMAND_STRONG) + demand_patterns(text)
+
+
+def actionable_signals(text):
+    """Phrases giving a concrete way to take the work forward."""
+    return find_terms(text, config.ACTIONABLE_CONTACT)
+
+
+def promo_veto(text):
+    """Course ads and referral spam, rejected wherever they appear."""
+    return find_terms(text, config.VETO_PROMO)
+
+
+def title_noise(title_text):
+    """Classify a title as news, venting, showcase, advice or job-seeking."""
+    for category, terms in config.TITLE_NOISE.items():
+        hits = find_terms(title_text, terms)
+        if hits:
+            return category, hits
+    return None, []
+
+
+def classify_intent(title, body, subreddit):
+    """Decide whether a post is a real gig from the person offering it.
+
+    Returns (is_lead, evidence, reason). The gates, in order:
+      1. no course/referral promotion anywhere;
+      2. the title must not announce a news, venting, showcase, advice or
+         job-seeking post - the title is what says which kind of post it is;
+      3. the poster must show first-person hiring intent;
+      4. there must be an actionable hook - money, a contact route, or an
+         explicit [Hiring] tag;
+      5. outside the gig subreddits the bar is higher: money or a [Hiring]
+         tag, since that is where courses, news and rants come from.
+    """
+    title_n = normalize(title)
+    text = normalize(title + " . " + body)
+
+    promo = promo_veto(text)
+    if promo:
+        return False, "", "promotional/course content (%s)" % ", ".join(promo[:2])
+
+    category, noise_hits = title_noise(title_n)
+    if category:
+        return False, "", "%s post, not a gig (title: %s)" % (category, noise_hits[0])
+
+    demand = demand_signals(text)
+    if not demand:
+        return False, "", "no first-person hiring intent"
+
+    pay = extract_pay(title + " " + body)
+    tagged = has_hiring_tag(title)
+    contact = actionable_signals(text)
+
+    if not (pay or tagged or contact):
+        return False, "", "hiring intent but no budget, contact route or [Hiring] tag"
+
+    if subreddit.lower() not in config.GIG_SUBREDDIT_SET and not (pay or tagged):
+        return False, "", "discussion subreddit without a stated budget or [Hiring] tag"
+
+    evidence = demand[:3]
+    if pay:
+        evidence.append("pays %s" % pay)
+    elif contact:
+        evidence.append(contact[0])
+    return True, "; ".join(evidence), ""

@@ -188,5 +188,104 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(scores, sorted(scores, reverse=True))
 
 
+class TestIntent(unittest.TestCase):
+    """The gate that separates real gigs from courses, news and venting."""
+
+    def assertDropped(self, title, body, subreddit, expected):
+        is_lead, _, reason = filters.classify_intent(title, body, subreddit)
+        self.assertFalse(is_lead, "%r should have been dropped" % title)
+        self.assertIn(expected, reason)
+
+    def test_real_gigs_pass(self):
+        cases = [
+            ("[Hiring] Remote AI engineer",
+             "We need someone to build a LangChain chatbot. Budget $5,000. DM me.",
+             "forhire"),
+            ("Looking for a remote n8n freelancer for an AI workflow",
+             "Our budget is $1,200. Remote, worldwide.", "n8n"),
+            ("Need someone to build an AI voice agent",
+             "Remote contract. Paying $60/hr. Reach out if interested.", "AI_Agents"),
+        ]
+        for title, body, subreddit in cases:
+            is_lead, evidence, reason = filters.classify_intent(title, body, subreddit)
+            self.assertTrue(is_lead, "%r was dropped: %s" % (title, reason))
+            self.assertTrue(evidence)
+
+    def test_words_between_verb_and_role_still_match(self):
+        # Fixed phrases miss "looking for a remote n8n automation freelancer",
+        # which is how people actually write.
+        for title in ["Looking for a remote n8n automation freelancer",
+                      "Need an experienced AI developer for a remote build",
+                      "Seeking a talented ML engineer, fully remote"]:
+            is_lead, evidence, reason = filters.classify_intent(
+                title, "Remote. Paying $50/hr.", "forhire")
+            self.assertTrue(is_lead, "%r was dropped: %s" % (title, reason))
+            self.assertTrue(evidence)
+
+    def test_advice_phrasing_is_not_demand(self):
+        # "looking for advice" must not read as "looking for a developer".
+        # Either the demand gate or the actionable-hook gate may catch it.
+        is_lead, _, reason = filters.classify_intent(
+            "Looking for advice on remote AI tools",
+            "Which tool is best for a remote team?", "LLMDevs")
+        self.assertFalse(is_lead)
+        self.assertTrue(
+            "no first-person hiring intent" in reason or "no budget" in reason,
+            "unexpected rejection reason: %s" % reason)
+
+    def test_course_promotion_dropped(self):
+        self.assertDropped("Learn AI Automation in 2026 - my Udemy course",
+                           "Enroll now with coupon code AI50. Remote learning.",
+                           "automation", "promotional/course content")
+
+    def test_news_dropped(self):
+        self.assertDropped("OpenAI announces GPT-6 for enterprise",
+                           "The company said the model is available to contract customers.",
+                           "LocalLLaMA", "news/announcement")
+
+    def test_venting_dropped(self):
+        self.assertDropped("Rant: everyone claims to be an AI engineer now",
+                           "I am so tired of this. My budget for patience is zero.",
+                           "LLMDevs", "discussion/venting")
+
+    def test_showcase_dropped(self):
+        self.assertDropped("I built an AI agent that books meetings",
+                           "Check out my project, remote team, feedback welcome.",
+                           "AI_Agents", "showcase")
+
+    def test_advice_seeking_dropped(self):
+        self.assertDropped("How do I become an AI engineer remotely?",
+                           "Any advice? I will pay for good courses.",
+                           "LLMDevs", "advice-seeking")
+
+    def test_intent_without_hook_dropped(self):
+        self.assertDropped("We need someone eventually",
+                           "Some day we might need an AI developer, remote.",
+                           "forhire", "no budget, contact route")
+
+    def test_discussion_sub_needs_money_or_tag(self):
+        # The same post is a lead in a gig subreddit but not in a chat one.
+        title = "Looking for someone to build an AI agent"
+        body = "Remote. Reach out if interested."
+        self.assertDropped(title, body, "LocalLLaMA", "discussion subreddit")
+        is_lead, _, _ = filters.classify_intent(title, body, "forhire")
+        self.assertTrue(is_lead)
+
+    def test_launch_in_body_does_not_veto_a_real_gig(self):
+        # "just launched" only disqualifies in a title, not in a body.
+        is_lead, _, reason = filters.classify_intent(
+            "[Hiring] Remote AI developer",
+            "We just launched our app and now need someone to build the AI layer. "
+            "Budget $4,000.", "forhire")
+        self.assertTrue(is_lead, reason)
+
+    def test_newsletter_project_is_not_promo(self):
+        # "newsletter" is a plausible project subject, so it must not veto.
+        is_lead, _, reason = filters.classify_intent(
+            "[Hiring] Need someone to automate my newsletter with AI",
+            "Paying $800. Remote.", "forhire")
+        self.assertTrue(is_lead, reason)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

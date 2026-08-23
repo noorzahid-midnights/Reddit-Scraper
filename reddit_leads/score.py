@@ -43,12 +43,21 @@ def score_lead(post, text, max_age_days=config.DEFAULT_MAX_AGE_DAYS, now=None):
         reasons.append("AI-adjacent: " + ", ".join(weak[:3]))
 
     title = filters.normalize(post.get("title"))
-    if filters.find_terms(title, ["[hiring]", "hiring", "looking for", "seeking"]):
+    if filters.has_hiring_tag(title):
+        total += 5
+        reasons.append("[Hiring]-tagged title")
+    elif filters.demand_signals(title):
         total += 4
         reasons.append("hiring intent in title")
-    elif filters.hiring_signals(text):
+    else:
         total += 2
         reasons.append("hiring intent in body")
+
+    # Several independent ways of saying "I am hiring" beats one stray phrase.
+    demand = filters.demand_signals(text)
+    total += min(len(demand), 3)
+    if len(demand) > 1:
+        reasons.append("%d demand signals" % len(demand))
 
     pay = filters.extract_pay(post.get("selftext", "") + " " + post.get("title", ""))
     if pay:

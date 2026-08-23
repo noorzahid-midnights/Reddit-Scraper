@@ -8,6 +8,7 @@ COLUMNS = [
     "subreddit",
     "title",
     "lead_type",
+    "intent_evidence",
     "work_location",
     "remote_evidence",
     "pay_or_budget",

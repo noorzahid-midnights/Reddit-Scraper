@@ -42,10 +42,39 @@ A post has to clear every one of these:
    not "s**ai**d" or "m**ai**ntain". Strong terms (`langchain`, `llm`, `rag`,
    `computer vision`, …) qualify a post on their own; weak ones (`python`,
    `automation`) only count when two or more appear together.
-3. **Someone hiring, not someone advertising.** `[FOR HIRE]` posts, portfolio
-   drops and "hire me" posts are excluded — those are competitors, not leads.
+3. **Someone hiring, not someone talking.** See below — this is the gate that
+   keeps out course ads, news and venting.
 4. **Remote, strictly.** See below.
 5. **Not a duplicate.** See below.
+
+### The demand rule
+
+Generic job words are useless as a filter: "paid", "contract", "rate" and
+"apply" all appear in Udemy ads, product announcements and rants. So a post has
+to show that the poster **themselves** is hiring or commissioning the work.
+Five gates, in order:
+
+1. **No course or referral promotion anywhere** — Udemy, coupon codes, "enroll
+   now", affiliate links. This list is deliberately narrow: "newsletter",
+   "youtube" and "bootcamp" are *not* on it, because "automate my newsletter"
+   is a real brief.
+2. **The title must not announce a different kind of post** — news
+   ("announces", "releases"), venting ("rant", "unpopular opinion"), showcase
+   ("I built", "check out my"), advice-seeking ("how do I", "any advice") or
+   job-seeking ("open to work"). Only the *title* vetoes: the same words in a
+   body are often incidental, and "we just launched, now we need an AI dev" is
+   a genuine lead.
+3. **First-person hiring intent**, matched two ways — fixed phrases ("we're
+   hiring", "my budget is", "willing to pay") and, because real posts write
+   "looking for a remote n8n automation freelancer", a **seek verb followed
+   within 60 characters by a role noun**. Fixed phrases alone miss those.
+4. **An actionable hook** — a stated budget, a contact route, or an explicit
+   `[Hiring]` tag. Intent with no way to act on it is not a lead.
+5. **Outside the gig subreddits, the bar rises** to money or a `[Hiring]` tag,
+   because that is where the courses, news and rants come from.
+
+The `intent_evidence` column shows the exact phrases that passed a lead, so
+every row can be audited.
 
 ### The remote rule
 
@@ -121,8 +150,13 @@ status and parsed entry count for each feed type.
 4. Run `generateLeads` once and approve the permission prompt
 5. Reload the sheet — a **Reddit Leads** menu appears; use it any time
 
-Results land in a sheet named **AI Remote Leads**. Adjust `CONFIG` at the top
-of the file to change the 14-day window or the lead count.
+Results land in a sheet named **AI Remote Leads**, and everything that was
+filtered out lands in **Rejected (audit)** with the reason. If a good lead was
+wrongly dropped, that sheet names the rule to loosen. Set
+`CONFIG.WRITE_AUDIT_SHEET` to `false` to skip it.
+
+Adjust `CONFIG` at the top of the file to change the 14-day window or the lead
+count.
 
 ## n8n version
 
@@ -154,7 +188,8 @@ so the Atom parsing and filtering can run outside Google:
 npm install @xmldom/xmldom && node tests/test_apps_script.js
 ```
 
-22 Python tests cover the onsite/negation logic, the AI-term false-positive guards,
+34 Python tests cover the demand gate and its noise classes, the
+onsite/negation logic, the AI-term false-positive guards,
 the recency window, self-promo exclusion, all four dedupe keys, and the
 end-to-end pipeline.
 

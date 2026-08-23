@@ -15,6 +15,8 @@ var CONFIG = {
   MAX_AGE_DAYS: 14,
   LEAD_COUNT: 20,
   SHEET_NAME: 'AI Remote Leads',
+  AUDIT_SHEET_NAME: 'Rejected (audit)',
+  WRITE_AUDIT_SHEET: true,
   REQUEST_DELAY_MS: 1200,
   USER_AGENT: 'web:reddit-ai-leads:1.0 (public feed reader, no account)'
 };
@@ -42,7 +44,37 @@ var SELF_PROMO_PREFIX = ['[for hire]','[forhire]','(for hire)','for hire','[avai
 var JOB_TERMS = ['full-time','full time','part-time','part time','salary','salaried','benefits','position','role','employee','annual','per year','/yr'];
 var STOPWORDS = ['a','an','the','for','to','of','and','or','in','on','at','with','we','our','you','your','is','are','be','need','needed','looking','hiring','hire','job','role','remote','usd','hour','hr','week','month','paid','pay','help','please','new','up'];
 
-var HEADERS = ['date_posted_utc','days_ago','subreddit','title','lead_type','work_location',
+// The demand gate. Generic job words ("paid", "contract", "rate", "apply")
+// appear in course ads, news posts and rants, so a lead has to show that the
+// poster THEMSELVES is hiring or commissioning the work.
+var DEMAND_STRONG = ['[hiring]','(hiring)','hiring:','we are hiring',"we're hiring",'i am hiring',"i'm hiring",'now hiring','is hiring','currently hiring','looking to hire','want to hire','wanting to hire','need to hire','ready to hire','hiring a','hiring an','hiring for','we are looking for',"we're looking for",'i am looking for',"i'm looking for",'looking for someone','looking for a developer','looking for a dev','looking for an engineer','looking for a freelancer','looking for a contractor','looking for an ai','looking for help building','our team is looking','my team is looking','i need someone','we need someone','need someone to','need someone who','i need a developer','we need a developer','need a developer','need an engineer','need an ai','need help building','need built','seeking a','seeking an','seeking someone','in search of someone','developer needed','dev needed','engineer needed','freelancer needed','contractor needed','consultant needed','help wanted','wanted:','job description','job opening','open position','position available','open role','we have an opening','join our team','role available','willing to pay','i will pay','we will pay','happy to pay','can pay','ready to pay','will compensate','my budget','our budget','budget is','budget of','budget:','paying $','pay $','offering $','paid gig','paid project','paid opportunity','paid role','paid work','freelance opportunity','contract opportunity','contract role','contract position'];
+
+// Fixed phrases only match contiguous text, but real posts write "looking for
+// a remote n8n automation freelancer". So a seek verb followed within a short
+// window by a role noun also counts as demand.
+var DEMAND_SEEK_VERBS = ['looking for','look for','looking to','seeking','searching for','in search of','need','needs','needed','want','wanting','hiring','recruiting','recruit','after','require','requires'];
+var DEMAND_ROLE_NOUNS = ['developer','dev','devs','engineer','engineers','freelancer','freelancers','contractor','consultant','programmer','coder','expert','experts','specialist','agency','someone','somebody','person','team','builder','architect','scientist','analyst','professional','pro','talent','candidate','partner'];
+var DEMAND_WINDOW_CHARS = 60;
+
+var ACTIONABLE_CONTACT = ['dm me','pm me','send me a dm','message me','email me','contact me','reach out','get in touch','hit me up','apply here','apply now','to apply','send your','share your','send me your','comment below','leave a comment','if interested','let me know if','happy to discuss','more details on request'];
+
+// Rejected wherever they appear. Deliberately narrow - "newsletter",
+// "youtube" and "bootcamp" are NOT here, because "automate my newsletter"
+// is a real lead.
+var VETO_PROMO = ['udemy','coursera','skillshare','free course','my course','join my course','enroll now','enrollment','coupon code','discount code','promo code','100% off','limited time offer','masterclass','webinar','affiliate link','referral link','giveaway','sign up for my','link in bio','dm for the link'];
+
+// Rejected only in the TITLE - the title is what says which kind of post it
+// is. The same words in a body are often incidental ("we just launched, now
+// we need an AI dev" is a real lead).
+var TITLE_NOISE = [
+  { label: 'news/announcement', terms: ['announced','announces','announcing','has released','releases','launches','launched today','study finds','research shows','report says','according to','breaking','just dropped','is now available','new model','comparison'] },
+  { label: 'discussion/venting', terms: ['what do you think','thoughts','your thoughts','discussion','unpopular opinion','am i the only one','rant','venting','vent','change my mind','hot take','poll','survey','eli5','does anyone else','why does everyone','is it just me'] },
+  { label: 'showcase', terms: ['i built','i made','i created','i developed','we built','we made','just launched','check out my','feedback on my','roast my','review my','sharing my','showcase','show off','my first','i open sourced','open sourced my'] },
+  { label: 'advice-seeking', terms: ['how do i','how can i','how to','any advice','need advice','recommendations','recommend','which tool','what tool','best way to','is it worth','should i','worth learning','career advice','beginner question','noob question','getting started','roadmap','learning path','help me understand'] },
+  { label: 'seeking work', terms: ['looking for work','looking for a job','seeking opportunities','open to work','my resume','my cv','my portfolio','years of experience','available for hire'] }
+];
+
+var HEADERS = ['date_posted_utc','days_ago','subreddit','title','lead_type','intent_evidence','work_location',
                'remote_evidence','pay_or_budget','author','post_url','contact','comments',
                'lead_score','why_it_matches','snippet'];
 
@@ -58,6 +90,7 @@ function generateLeads() {
   var posts = fetchAllPosts();
   var result = buildLeads(posts);
   writeSheet(result.rows);
+  if (CONFIG.WRITE_AUDIT_SHEET) { writeAuditSheet(result.rejected); }
   var message = posts.length + ' posts scanned, ' + result.stats.unique +
     ' unique leads found, ' + result.rows.length + ' written.';
   if (posts.length === 0) {
@@ -342,8 +375,8 @@ function isWordChar(ch) {
   return /[a-z0-9]/.test(ch);
 }
 
-function findTerm(text, term) {
-  var from = 0;
+function findTerm(text, term, startAt) {
+  var from = startAt || 0;
   while (from <= text.length) {
     var i = text.indexOf(term, from);
     if (i === -1) { return -1; }
@@ -396,6 +429,86 @@ function contactHint(post, body) {
 
 // --- Lead building ----------------------------------------------------------
 
+/** A seek verb followed closely by a role noun. */
+function demandPatterns(text) {
+  var found = [];
+  for (var v = 0; v < DEMAND_SEEK_VERBS.length; v++) {
+    var verb = DEMAND_SEEK_VERBS[v];
+    var at = 0;
+    while (true) {
+      var i = findTerm(text, verb, at);
+      if (i === -1) { break; }
+      var after = i + verb.length;
+      var roles = hits(text.slice(after, after + DEMAND_WINDOW_CHARS), DEMAND_ROLE_NOUNS);
+      if (roles.length) { found.push(verb + ' ... ' + roles[0]); break; }
+      at = i + 1;
+    }
+  }
+  return found;
+}
+
+function hasHiringTag(titleLower) {
+  return /^\s*[\[\(]?\s*hiring\b/.test(titleLower) ||
+         titleLower.indexOf('[hiring]') !== -1 ||
+         titleLower.indexOf('(hiring)') !== -1;
+}
+
+function titleNoise(titleLower) {
+  for (var i = 0; i < TITLE_NOISE.length; i++) {
+    var found = hits(titleLower, TITLE_NOISE[i].terms);
+    if (found.length) { return { label: TITLE_NOISE[i].label, term: found[0] }; }
+  }
+  return null;
+}
+
+/**
+ * Is this a real gig from the person offering it?
+ *
+ * Gates, in order: no course/referral promotion anywhere; the title must not
+ * announce a news, venting, showcase, advice or job-seeking post; the poster
+ * must show first-person hiring intent; there must be an actionable hook
+ * (money, a contact route, or an explicit [Hiring] tag); and outside the gig
+ * subreddits the bar rises to money or a tag, since that is where courses,
+ * news and rants come from.
+ */
+function classifyIntent(titleLower, text, subreddit, pay) {
+  var promo = hits(text, VETO_PROMO);
+  if (promo.length) {
+    return { ok: false, reason: 'promotional/course content (' + promo[0] + ')' };
+  }
+
+  var noise = titleNoise(titleLower);
+  if (noise) {
+    return { ok: false, reason: noise.label + ' post, not a gig (title: ' + noise.term + ')' };
+  }
+
+  var demand = hits(text, DEMAND_STRONG).concat(demandPatterns(text));
+  if (!demand.length) {
+    return { ok: false, reason: 'no first-person hiring intent' };
+  }
+
+  var tagged = hasHiringTag(titleLower);
+  var contact = hits(text, ACTIONABLE_CONTACT);
+  if (!pay && !tagged && !contact.length) {
+    return { ok: false, reason: 'hiring intent but no budget, contact route or [Hiring] tag' };
+  }
+
+  var sub = String(subreddit || '').toLowerCase();
+  var isGigSub = false;
+  for (var g = 0; g < GIG_SUBREDDITS.length; g++) {
+    if (GIG_SUBREDDITS[g].toLowerCase() === sub) { isGigSub = true; break; }
+  }
+  if (!isGigSub && !pay && !tagged) {
+    return { ok: false, reason: 'discussion subreddit without a stated budget or [Hiring] tag' };
+  }
+
+  var evidence = demand.slice(0, 3);
+  if (pay) { evidence.push('pays ' + pay); }
+  else if (contact.length) { evidence.push(contact[0]); }
+
+  return { ok: true, evidence: evidence.join('; '), demand: demand, tagged: tagged };
+}
+
 function titleSignature(title) {
   var words = String(title || '').toLowerCase().match(/[a-z0-9]+/g) || [];
   var kept = [];
@@ -410,21 +523,37 @@ function titleSignature(title) {
 function buildLeads(posts) {
   var nowSec = Date.now() / 1000;
   var leads = [];
+  var rejected = [];
+  var reasonCounts = {};
+
+  function drop(post, title, reason) {
+    reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
+    // Keep the near-misses so the filter can be audited and tuned.
+    if (rejected.length < 300) {
+      rejected.push([
+        'r/' + post.subreddit,
+        title,
+        reason,
+        'https://www.reddit.com' + post.permalink
+      ]);
+    }
+  }
 
   for (var i = 0; i < posts.length; i++) {
     var post = posts[i];
+    var title = collapse(post.title);
+    var titleLower = title.toLowerCase();
+
     var ageDays = (nowSec - (post.created_utc || 0)) / 86400;
     if (ageDays < 0 || ageDays > CONFIG.MAX_AGE_DAYS) { continue; }
     if (post.removed_by_category || post.selftext === '[removed]' ||
         post.selftext === '[deleted]') { continue; }
 
-    var title = collapse(post.title);
-    var titleLower = title.toLowerCase();
     var isSelfPromo = false;
     for (var s = 0; s < SELF_PROMO_PREFIX.length; s++) {
       if (titleLower.indexOf(SELF_PROMO_PREFIX[s]) === 0) { isSelfPromo = true; break; }
     }
-    if (isSelfPromo) { continue; }
+    if (isSelfPromo) { drop(post, title, 'author is offering services, not hiring'); continue; }
 
     var body = collapse(post.selftext);
     var text = titleLower + ' . ' + body.toLowerCase();
@@ -433,15 +562,23 @@ function buildLeads(posts) {
     var weak = hits(text, AI_WEAK);
     if (strong.length === 0 && weak.length < 2) { continue; }
 
-    var hiring = hits(text, HIRING);
-    if (hiring.length === 0) { continue; }
+    var pay = extractPay(title + ' ' + body);
 
-    if (onsiteHits(text).length > 0) { continue; }
+    var intent = classifyIntent(titleLower, text, post.subreddit, pay);
+    if (!intent.ok) { drop(post, title, intent.reason); continue; }
+
+    if (onsiteHits(text).length > 0) {
+      drop(post, title, 'onsite/hybrid marker: ' + onsiteHits(text).slice(0, 2).join(', '));
+      continue;
+    }
 
     var remote = hits(text, REMOTE);
     var sub = String(post.subreddit || '').toLowerCase();
     var remoteByRule = REMOTE_SUBS.indexOf(sub) !== -1;
-    if (remote.length === 0 && !remoteByRule) { continue; }
+    if (remote.length === 0 && !remoteByRule) {
+      drop(post, title, 'no explicit remote statement');
+      continue;
+    }
 
     // --- score ---
     var reasons = [];
@@ -449,13 +586,20 @@ function buildLeads(posts) {
     reasons.push(strong.length ? 'AI: ' + strong.slice(0, 4).join(', ')
                                : 'AI-adjacent: ' + weak.slice(0, 3).join(', '));
 
-    if (hits(titleLower, ['hiring', 'looking for', 'seeking']).length) {
+    if (intent.tagged) {
+      score += 5; reasons.push('[Hiring]-tagged title');
+    } else if (hits(titleLower, DEMAND_STRONG).length) {
       score += 4; reasons.push('hiring intent in title');
     } else {
       score += 2; reasons.push('hiring intent in body');
     }
 
-    var pay = extractPay(title + ' ' + body);
+    // Several independent ways of saying "I am hiring" beats one stray phrase.
+    score += Math.min(intent.demand.length, 3);
+    if (intent.demand.length > 1) {
+      reasons.push(intent.demand.length + ' demand signals');
+    }
+
     if (pay) { score += 4; reasons.push('budget stated (' + pay + ')'); }
 
     score += Math.max(0, (CONFIG.MAX_AGE_DAYS - ageDays) / CONFIG.MAX_AGE_DAYS) * 5;
@@ -476,6 +620,7 @@ function buildLeads(posts) {
         'r/' + post.subreddit,
         title,
         hits(text, JOB_TERMS).length ? 'job' : 'project/gig',
+        intent.evidence,
         'Remote',
         remote.length ? remote.slice(0, 3).join(', ')
                       : 'r/' + post.subreddit + ' is remote-only by subreddit rule',
@@ -516,7 +661,11 @@ function buildLeads(posts) {
   for (var r = 0; r < Math.min(CONFIG.LEAD_COUNT, unique.length); r++) {
     rows.push(unique[r].row);
   }
-  return { rows: rows, stats: { unique: unique.length, duplicates: duplicates } };
+  return {
+    rows: rows,
+    rejected: rejected,
+    stats: { unique: unique.length, duplicates: duplicates, reasons: reasonCounts }
+  };
 }
 
 // --- Output -----------------------------------------------------------------
@@ -537,5 +686,27 @@ function writeSheet(rows) {
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, HEADERS.length);
   sheet.getRange(1, 4).setNote('Post title');
+  return sheet;
+}
+
+/**
+ * Everything that was filtered out, with the reason. Use it to check the
+ * filter is not throwing away good leads - if it is, the reason column says
+ * which rule to loosen.
+ */
+function writeAuditSheet(rejected) {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet) { return null; }
+  var sheet = spreadsheet.getSheetByName(CONFIG.AUDIT_SHEET_NAME) ||
+              spreadsheet.insertSheet(CONFIG.AUDIT_SHEET_NAME);
+  sheet.clear();
+  var headers = ['subreddit', 'title', 'rejected_because', 'post_url'];
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers])
+       .setFontWeight('bold').setBackground('#fbe4e4');
+  if (rejected.length) {
+    sheet.getRange(2, 1, rejected.length, headers.length).setValues(rejected);
+  }
+  sheet.setFrozenRows(1);
+  sheet.autoResizeColumns(1, headers.length);
   return sheet;
 }

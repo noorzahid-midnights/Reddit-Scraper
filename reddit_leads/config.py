@@ -161,3 +161,122 @@ DEFAULT_LEAD_COUNT = 20
 USER_AGENT = "python:reddit-ai-leads:1.0 (public JSON reader; no account)"
 REQUEST_DELAY_SECONDS = 2.0
 MAX_RETRIES = 4
+
+
+# --- Demand intent -----------------------------------------------------------
+# The original HIRING_TERMS list was too loose: "paid", "contract", "rate" and
+# "apply" all show up in course ads, news posts and rants. A lead has to show
+# that the poster *themselves* is hiring or commissioning work, so the phrases
+# below are first-person and demand-side rather than merely job-flavoured.
+
+DEMAND_STRONG = [
+    # explicit hiring declarations
+    "[hiring]", "(hiring)", "hiring:", "we are hiring", "we're hiring",
+    "i am hiring", "i'm hiring", "now hiring", "is hiring", "currently hiring",
+    "looking to hire", "want to hire", "wanting to hire", "need to hire",
+    "ready to hire", "hiring a", "hiring an", "hiring for",
+    # first-person searches for a person
+    "we are looking for", "we're looking for", "i am looking for",
+    "i'm looking for", "looking for someone", "looking for a developer",
+    "looking for a dev", "looking for an engineer", "looking for a freelancer",
+    "looking for a contractor", "looking for an ai", "looking for help building",
+    "our team is looking", "my team is looking",
+    "i need someone", "we need someone", "need someone to", "need someone who",
+    "i need a developer", "we need a developer", "need a developer",
+    "need an engineer", "need an ai", "need help building", "need built",
+    "seeking a", "seeking an", "seeking someone", "in search of someone",
+    # role-needed phrasings
+    "developer needed", "dev needed", "engineer needed", "freelancer needed",
+    "contractor needed", "consultant needed", "help wanted", "wanted:",
+    # formal postings
+    "job description", "job opening", "open position", "position available",
+    "open role", "we have an opening", "join our team", "role available",
+    # money the poster is offering
+    "willing to pay", "i will pay", "we will pay", "happy to pay", "can pay",
+    "ready to pay", "will compensate", "my budget", "our budget", "budget is",
+    "budget of", "budget:", "paying $", "pay $", "offering $",
+    "paid gig", "paid project", "paid opportunity", "paid role", "paid work",
+    "freelance opportunity", "contract opportunity", "contract role",
+    "contract position",
+]
+
+# Fixed phrases only match contiguous text, but real posts write "looking for
+# a remote n8n automation freelancer". So a seek verb followed within a short
+# window by a role noun also counts as demand.
+DEMAND_SEEK_VERBS = [
+    "looking for", "look for", "looking to", "seeking", "searching for",
+    "in search of", "need", "needs", "needed", "want", "wanting",
+    "hiring", "recruiting", "recruit", "after", "require", "requires",
+]
+
+DEMAND_ROLE_NOUNS = [
+    "developer", "dev", "devs", "engineer", "engineers", "freelancer",
+    "freelancers", "contractor", "consultant", "programmer", "coder",
+    "expert", "experts", "specialist", "agency", "someone", "somebody",
+    "person", "team", "builder", "architect", "scientist", "analyst",
+    "professional", "pro", "talent", "candidate", "partner",
+]
+
+# How far after the verb the role noun may sit.
+DEMAND_WINDOW_CHARS = 60
+
+# An actionable hook: proof there is a real way to take the work.
+ACTIONABLE_CONTACT = [
+    "dm me", "pm me", "send me a dm", "message me", "email me", "contact me",
+    "reach out", "get in touch", "hit me up", "apply here", "apply now",
+    "to apply", "send your", "share your", "send me your", "comment below",
+    "leave a comment", "if interested", "let me know if", "happy to discuss",
+    "more details on request",
+]
+
+# --- Noise the demand gate cannot catch on its own ---------------------------
+# Rejected wherever they appear: none of these can plausibly be a project
+# brief. Deliberately narrow — "newsletter", "youtube" and "bootcamp" are NOT
+# here, because "automate my newsletter" is a real lead.
+VETO_PROMO = [
+    "udemy", "coursera", "skillshare", "free course", "my course",
+    "join my course", "enroll now", "enrollment", "coupon code",
+    "discount code", "promo code", "100% off", "limited time offer",
+    "masterclass", "webinar", "affiliate link", "referral link", "giveaway",
+    "sign up for my", "link in bio", "dm for the link",
+]
+
+# Rejected only when they appear in the TITLE. The title says what kind of
+# post it is; the same words in a body are often incidental ("we just
+# launched, now we need an AI dev" is a real lead).
+TITLE_NOISE = {
+    "news/announcement": [
+        "announced", "announces", "announcing", "has released", "releases",
+        "launches", "launched today", "study finds", "research shows",
+        "report says", "according to", "breaking", "just dropped",
+        "is now available", "new model", "comparison",
+    ],
+    "discussion/venting": [
+        "what do you think", "thoughts", "your thoughts", "discussion",
+        "unpopular opinion", "am i the only one", "rant", "venting",
+        "vent", "change my mind", "hot take", "poll", "survey", "eli5",
+        "does anyone else", "why does everyone", "is it just me",
+    ],
+    "showcase": [
+        "i built", "i made", "i created", "i developed", "we built", "we made",
+        "just launched", "check out my", "feedback on my", "roast my",
+        "review my", "sharing my", "showcase", "show off", "my first",
+        "i open sourced", "open sourced my",
+    ],
+    "advice-seeking": [
+        "how do i", "how can i", "how to", "any advice", "need advice",
+        "recommendations", "recommend", "which tool", "what tool",
+        "best way to", "is it worth", "should i", "worth learning",
+        "career advice", "beginner question", "noob question",
+        "getting started", "roadmap", "learning path", "help me understand",
+    ],
+    "seeking work": [
+        "looking for work", "looking for a job", "seeking opportunities",
+        "open to work", "my resume", "my cv", "my portfolio",
+        "years of experience", "available for hire",
+    ],
+}
+
+# Subreddits that exist to host gigs. Elsewhere (discussion-oriented AI subs)
+# the bar is raised, because that is where courses, news and rants come from.
+GIG_SUBREDDIT_SET = {s.lower() for s in GIG_SUBREDDITS}

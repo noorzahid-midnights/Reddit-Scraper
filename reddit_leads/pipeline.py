@@ -33,8 +33,10 @@ def build_lead(post, max_age_days, now):
     if not filters.is_ai_related(text):
         return None, "not AI-related"
 
-    if not filters.hiring_signals(text):
-        return None, "no hiring/paid intent"
+    is_gig, intent_evidence, not_a_gig = filters.classify_intent(
+        title, post.get("selftext", ""), subreddit)
+    if not is_gig:
+        return None, not_a_gig
 
     is_remote, evidence, why_not = filters.classify_location(text, subreddit)
     if not is_remote:
@@ -54,6 +56,7 @@ def build_lead(post, max_age_days, now):
             "subreddit": "r/" + subreddit,
             "title": " ".join(title.split()),
             "lead_type": filters.lead_type(text),
+            "intent_evidence": intent_evidence,
             "work_location": "Remote",
             "remote_evidence": evidence,
             "pay_or_budget": filters.extract_pay(title + " " + body) or "not stated",

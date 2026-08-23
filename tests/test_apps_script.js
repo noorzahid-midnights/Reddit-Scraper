@@ -75,6 +75,16 @@ const feed = `<?xml version="1.0" encoding="UTF-8"?>
     'Remote, worldwide. Budget $1,200 for an AI automation workflow with OpenAI. ' + 'Details. '.repeat(30), 5)}
   ${entry('fff666','forhire','clientfive','[Hiring] Remote computer vision contractor',
     'Fully remote contract. We need OCR and computer vision work, no relocation required. ' + 'Scope. '.repeat(30), 3)}
+  ${entry('ggg777','automation','coursebro','Learn AI Automation in 2026 - my Udemy course',
+    'Enroll now with coupon code AI50. Remote learning, work from home. Budget friendly at $12.', 1)}
+  ${entry('hhh888','LocalLLaMA','newsbot','OpenAI announces GPT-6 for remote enterprise teams',
+    'The company said the model is available to contract customers worldwide. Paying customers get early access.', 1)}
+  ${entry('iii999','LLMDevs','ranter','Rant: everyone claims to be a remote AI engineer now',
+    'I am so tired of this. My budget for patience is $0. Work from home does not make you an ML engineer.', 2)}
+  ${entry('jjj000','AI_Agents','builder','I built an AI agent that books meetings, fully remote team',
+    'Check out my project. We are looking for feedback. Budget was $500 to build.', 1)}
+  ${entry('kkk111','LLMDevs','learner','How do I become a remote AI engineer?',
+    'Any advice? I am looking for a developer path and willing to pay for good courses.', 1)}
 </feed>`;
 
 const posts = parseFeed(feed);
@@ -93,8 +103,21 @@ console.log('tags stripped:', !p0.selftext.includes('<'));
 console.log('\n=== buildLeads ===');
 const out = buildLeads(posts);
 console.log('leads:', out.rows.length, '| dupes:', out.stats.duplicates);
-out.rows.forEach(r => console.log(` - ${r[2].padEnd(10)} | ${r[7].padEnd(8)} | score ${String(r[12]).padEnd(6)} | ${r[3].slice(0,52)}`));
-console.log('\nrejected as expected:', ['bbb222 (onsite)','ccc333 (for hire)','ddd444 (20 days old)']
-  .filter((_, i) => !out.rows.some(r => r[9].includes(['bbb222','ccc333','ddd444'][i]))).join(', '));
-console.log('sample row url:', out.rows[0][9]);
-console.log('comments col:', JSON.stringify(out.rows[0][11]));
+out.rows.forEach(r => console.log(` - ${r[2].padEnd(10)} | ${r[8].padEnd(10)} | score ${String(r[13]).padEnd(6)} | ${r[3].slice(0,50)}`));
+console.log('\nintent evidence for top lead:', out.rows[0][5]);
+
+console.log('\n=== noise rejected ===');
+const noise = { ggg777: 'udemy course', hhh888: 'news', iii999: 'venting', jjj000: 'showcase', kkk111: 'advice' };
+let allDropped = true;
+for (const [id, label] of Object.entries(noise)) {
+  const leaked = out.rows.some(r => r[10].includes(id));
+  if (leaked) { allDropped = false; }
+  const why = (out.rejected.find(x => x[3].includes(id)) || [])[2] || '(not in audit list)';
+  console.log(` ${leaked ? 'LEAKED' : 'dropped'} | ${label.padEnd(13)} | ${why}`);
+}
+console.log('\nall noise dropped:', allDropped);
+console.log('\nfilter rejects:', ['bbb222 (onsite)','ccc333 (for hire)','ddd444 (20 days old)']
+  .filter((_, i) => !out.rows.some(r => r[10].includes(['bbb222','ccc333','ddd444'][i]))).join(', '));
+console.log('\nsample row url:', out.rows[0][10]);
+console.log('comments col:', JSON.stringify(out.rows[0][12]));
+if (!allDropped) { process.exitCode = 1; }
