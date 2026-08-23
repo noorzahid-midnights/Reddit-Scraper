@@ -173,6 +173,9 @@ properties, so deleting a row by hand really does forget it, and the two can
 never drift apart.
 
 **Reddit Leads → Auto-update status** reports whether the schedule is live.
+To stop the schedule, either use **Turn off auto-update**, or delete the
+triggers by hand from the Apps Script editor's **clock icon** (Triggers) — both
+do the same thing, and no code change is needed either way.
 The **Run log** sheet records every run — when, how many posts were scanned, how
 many matched, how many were new — so a silent failure is visible rather than
 looking like a quiet week.
@@ -187,6 +190,33 @@ looking like a quiet week.
 | `MAX_AGE_DAYS` | `14` | ignore posts older than this |
 | `WRITE_AUDIT_SHEET` | `true` | write the rejection audit sheet |
 | `SPREADSHEET_ID` | `''` | only needed if the script is not bound to a Sheet |
+| `MIRROR_SPREADSHEET_ID` | `''` | second spreadsheet to copy new leads into |
+
+### Mirroring into a second spreadsheet
+
+Set `MIRROR_SPREADSHEET_ID` to the ID from the other spreadsheet's URL
+(`docs.google.com/spreadsheets/d/`**`THIS_PART`**`/edit`). Every run then copies
+its new leads there too. The account running the script needs edit access to
+it, so share it if the two live in different accounts.
+
+The mirror is a real copy, not a formula: it is checked against its own
+contents, so deleting a row there does not bring it back, and it is never
+pruned. Notes you add in spare columns to the right stay attached to their row
+as later leads push it down — which is the point, if the mirror is where you
+actually work the leads.
+
+A mirror that fails (wrong ID, no access) is reported in the run log and the
+run continues; it can never cost you the leads themselves.
+
+If you only want to *read* the leads elsewhere and never annotate them, skip
+all of this and put a formula in the other sheet instead:
+
+```
+=IMPORTRANGE("<source spreadsheet URL>", "AI Remote Leads!A:Q")
+```
+
+That needs no code and updates itself, but the range is read-only — anything
+you type into it is overwritten.
 
 ## n8n version
 

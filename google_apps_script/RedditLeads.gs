@@ -23,6 +23,7 @@ var CONFIG = {
   EMAIL_ON_NEW_LEADS: false,  // set true to be emailed when new leads land
   EMAIL_TO: '',               // blank = the account running the script
   SPREADSHEET_ID: '',         // only needed if the script is not bound to a Sheet
+  MIRROR_SPREADSHEET_ID: '',  // optional 2nd spreadsheet to copy new leads into
   REQUEST_DELAY_MS: 1200,
   USER_AGENT: 'web:reddit-ai-leads:1.0 (public feed reader, no account)'
 };
@@ -132,18 +133,30 @@ function generateLeads() {
   if (CONFIG.WRITE_AUDIT_SHEET) { writeAuditSheet(result.rejected); }
 
   var notes = '';
-  if (posts.length === 0) {
-    notes = 'No posts fetched -- HTTP codes: ' + JSON.stringify(FETCH_LOG.byCode) +
-            ' | first body: ' + (FETCH_LOG.sample || '(empty)');
-  } else if (!fresh.length) {
-    notes = 'No new leads; every match was already in the sheet.';
+  var mirrored = 0;
+  if (CONFIG.MIRROR_SPREADSHEET_ID) {
+    try {
+      mirrored = mirrorNewLeads(fresh, startedAt);
+    } catch (e) {
+      // A broken mirror must not lose the run's real work.
+      notes = 'Mirror failed: ' + e.message + '. ';
+    }
   }
 
-  logRun([startedAt, posts.length, result.rows.length, fresh.length, pruned, notes]);
+  if (posts.length === 0) {
+    notes += 'No posts fetched -- HTTP codes: ' + JSON.stringify(FETCH_LOG.byCode) +
+            ' | first body: ' + (FETCH_LOG.sample || '(empty)');
+  } else if (!fresh.length) {
+    notes += 'No new leads; every match was already in the sheet.';
+  }
+
+  logRun([startedAt, posts.length, result.rows.length, fresh.length, mirrored, pruned, notes]);
   notifyNewLeads(fresh);
 
   var message = posts.length + ' posts scanned, ' + result.rows.length + ' matched, ' +
-                fresh.length + ' new added' + (pruned ? ', ' + pruned + ' pruned' : '') +
+                fresh.length + ' new added' +
+                (mirrored ? ', ' + mirrored + ' mirrored' : '') +
+                (pruned ? ', ' + pruned + ' pruned' : '') +
                 '.' + (notes ? ' ' + notes : '');
   Logger.log(message);
   toast(message);
@@ -732,9 +745,9 @@ function getSpreadsheet() {
   return spreadsheet;
 }
 
-function sheetNamed(name) {
-  var spreadsheet = getSpreadsheet();
-  return spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
+function sheetNamed(name, spreadsheet) {
+  var target = spreadsheet || getSpreadsheet();
+  return target.getSheetByName(name) || target.insertSheet(name);
 }
 
 function toast(message) {
@@ -748,8 +761,8 @@ function toast(message) {
 
 // --- Leads sheet (append-only) ----------------------------------------------
 
-function ensureLeadsSheet() {
-  var sheet = sheetNamed(CONFIG.SHEET_NAME);
+function ensureLeadsSheet(spreadsheet) {
+  var sheet = sheetNamed(CONFIG.SHEET_NAME, spreadsheet);
   var headerMatches = false;
 
   if (sheet.getLastRow() >= 1 && sheet.getLastColumn() === SHEET_HEADERS.length) {
@@ -799,12 +812,47 @@ function existingPostIds(sheet) {
 function prependLeads(sheet, rows, stamp) {
   if (!rows.length) { return; }
   sheet.insertRowsAfter(1, rows.length);
+
   var values = [];
   for (var i = 0; i < rows.length; i++) {
     values.push([stamp].concat(rows[i]));
   }
-  sheet.getRange(2, 1, values.length, SHEET_HEADERS.length).setValues(values);
+
+  var range = sheet.getRange(2, 1, values.length, SHEET_HEADERS.length);
+  range.setValues(values);
+
+  // A row inserted directly beneath the header inherits the header's
+  // formatting, which is why new leads arrived bold and shaded. Reset it.
+  range.setFontWeight('normal')
+       .setFontStyle('normal')
+       .setBackground(null)
+       .setFontColor(null);
+
   sheet.getRange(2, 1, values.length, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+}
+
+/**
+ * Copy new leads into a second spreadsheet, if one is configured.
+ *
+ * The mirror is checked against its own contents, so deleting a row there
+ * does not resurrect it from the main sheet, and it is never pruned - it is
+ * your working copy, and notes you add in spare columns travel with their row
+ * when later leads push it down.
+ */
+function mirrorNewLeads(rows, stamp) {
+  if (!CONFIG.MIRROR_SPREADSHEET_ID || !rows.length) { return 0; }
+
+  var sheet = ensureLeadsSheet(SpreadsheetApp.openById(CONFIG.MIRROR_SPREADSHEET_ID));
+  var seen = existingPostIds(sheet);
+
+  var unseen = [];
+  for (var i = 0; i < rows.length; i++) {
+    var id = postIdFromUrl(rows[i][URL_INDEX]);
+    if (id && !seen[id]) { unseen.push(rows[i]); }
+  }
+
+  prependLeads(sheet, unseen, stamp);
+  return unseen.length;
 }
 
 /** Stop the sheet growing without bound. */
@@ -853,7 +901,7 @@ function writeAuditSheet(rejected) {
 /** One row per run, so an unattended job cannot fail silently. */
 function logRun(entry) {
   var sheet = sheetNamed(CONFIG.LOG_SHEET_NAME);
-  var headers = ['when', 'posts_scanned', 'leads_matched', 'new_added', 'pruned', 'notes'];
+  var headers = ['when', 'posts_scanned', 'leads_matched', 'new_added', 'mirrored', 'pruned', 'notes'];
 
   if (sheet.getLastRow() < 1 || sheet.getLastColumn() !== headers.length) {
     sheet.clear();
