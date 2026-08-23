@@ -16,19 +16,14 @@ var CONFIG = {
   LEAD_COUNT: 20,
   SHEET_NAME: 'AI Remote Leads',
   REQUEST_DELAY_MS: 1200,
-  TRY_OLD_REDDIT: true,
-  USER_AGENT: 'web:reddit-ai-leads:1.0 (public JSON reader, no account)'
+  USER_AGENT: 'web:reddit-ai-leads:1.0 (public feed reader, no account)'
 };
 
 var GIG_SUBREDDITS = ['forhire', 'jobbit', 'hiring', 'freelance_forhire',
                       'RemoteJobs', 'remotejs', 'WorkOnline', 'b2bforhire'];
 var AI_SUBREDDITS = ['AI_Agents', 'n8n', 'LLMDevs', 'MachineLearningJobs',
                      'automation', 'LocalLLaMA', 'PromptEngineering'];
-var GIG_QUERIES = ['AI OR LLM OR GPT',
-                   'machine learning OR deep learning OR NLP',
-                   'chatbot OR automation OR n8n OR prompt engineer'];
-var AI_QUERIES = ['hiring OR recruiting OR vacancy',
-                  'freelancer OR contractor OR paid OR budget'];
+var FEED_QUERY = 'AI OR LLM OR GPT OR chatbot OR machine learning OR automation';
 var GLOBAL_QUERIES = ['hiring AI engineer remote',
                       'looking for AI developer remote paid',
                       'hiring LLM developer remote',
@@ -79,35 +74,18 @@ function generateLeads() {
   return message;
 }
 
-// --- Fetching ---------------------------------------------------------------
+// --- Fetching (Atom feeds, not JSON) ----------------------------------------
+//
+// Reddit answers .json with HTTP 403 and a block page when the request comes
+// from a datacenter IP range, which is where Apps Script runs. The .rss feeds
+// are served normally from the same addresses, so everything here reads Atom.
+// The trade-off: feeds carry no comment count or score, and search feeds
+// sometimes omit the post body.
 
-function buildUrls() {
-  var urls = [];
-  var q = encodeURIComponent;
-  var i, j;
-  for (i = 0; i < GIG_SUBREDDITS.length; i++) {
-    for (j = 0; j < GIG_QUERIES.length; j++) {
-      urls.push('https://www.reddit.com/r/' + GIG_SUBREDDITS[i] + '/search.json?q=' +
-                q(GIG_QUERIES[j]) + '&restrict_sr=1&sort=new&t=month&limit=100&raw_json=1');
-    }
-  }
-  for (i = 0; i < AI_SUBREDDITS.length; i++) {
-    urls.push('https://www.reddit.com/r/' + AI_SUBREDDITS[i] + '/new.json?limit=100&raw_json=1');
-    for (j = 0; j < AI_QUERIES.length; j++) {
-      urls.push('https://www.reddit.com/r/' + AI_SUBREDDITS[i] + '/search.json?q=' +
-                q(AI_QUERIES[j]) + '&restrict_sr=1&sort=new&t=month&limit=100&raw_json=1');
-    }
-  }
-  for (i = 0; i < GLOBAL_QUERIES.length; i++) {
-    urls.push('https://www.reddit.com/search.json?q=' + q(GLOBAL_QUERIES[i]) +
-              '&sort=new&t=month&limit=100&raw_json=1');
-  }
-  return urls;
-}
+var ATOM_NS = 'http://www.w3.org/2005/Atom';
 
-/** Per-run record of what Reddit actually answered, so a zero-result run
- *  reports the reason instead of silently writing an empty sheet. */
-var FETCH_LOG = { ok: 0, failed: 0, byCode: {}, sample: '' };
+/** Per-run record of what Reddit actually answered. */
+var FETCH_LOG = { ok: 0, failed: 0, entries: 0, byCode: {}, sample: '' };
 
 function noteCode(code) {
   FETCH_LOG.byCode[code] = (FETCH_LOG.byCode[code] || 0) + 1;
@@ -125,76 +103,198 @@ function httpGet(url) {
     followRedirects: true,
     headers: {
       'User-Agent': CONFIG.USER_AGENT,
-      'Accept': 'application/json, text/plain, */*',
+      'Accept': 'application/atom+xml, application/xml, text/xml, */*',
       'Accept-Language': 'en-US,en;q=0.9'
     }
   });
 }
 
-/**
- * Fetch one Reddit JSON URL.
- *
- * Reddit rate-limits and sometimes outright blocks datacenter IP ranges,
- * which is what Apps Script requests come from. When www.reddit.com refuses,
- * old.reddit.com is tried as well - it is served by a different stack and is
- * often more permissive.
- */
-function fetchJson(url) {
-  var variants = [url];
-  if (CONFIG.TRY_OLD_REDDIT && url.indexOf('://www.reddit.com') !== -1) {
-    variants.push(url.replace('://www.reddit.com', '://old.reddit.com'));
+/** Which feeds to read. */
+function buildFeeds() {
+  var feeds = [];
+  var q = encodeURIComponent;
+  var i, j;
+
+  // Backbone: the newest posts in every gig and AI subreddit. Filtering
+  // happens locally, so a broad feed beats a narrow query.
+  for (i = 0; i < GIG_SUBREDDITS.length; i++) {
+    feeds.push('https://www.reddit.com/r/' + GIG_SUBREDDITS[i] + '/new.rss?limit=100');
+  }
+  for (i = 0; i < AI_SUBREDDITS.length; i++) {
+    feeds.push('https://www.reddit.com/r/' + AI_SUBREDDITS[i] + '/new.rss?limit=100');
   }
 
-  for (var v = 0; v < variants.length; v++) {
-    for (var attempt = 0; attempt < 3; attempt++) {
-      var response;
-      try {
-        response = httpGet(variants[v]);
-      } catch (e) {
-        noteCode('exception');
-        noteSample(e.message);
-        break;
-      }
+  // Targeted: AI terms inside the gig subreddits, reaching past the newest 100.
+  for (i = 0; i < GIG_SUBREDDITS.length; i++) {
+    feeds.push('https://www.reddit.com/r/' + GIG_SUBREDDITS[i] + '/search.rss?q=' +
+               q(FEED_QUERY) + '&restrict_sr=1&sort=new&t=month&limit=100');
+  }
 
-      var code = response.getResponseCode();
-      noteCode(code);
+  // Sitewide, to catch subreddits that are not on either list.
+  for (j = 0; j < GLOBAL_QUERIES.length; j++) {
+    feeds.push('https://www.reddit.com/search.rss?q=' + q(GLOBAL_QUERIES[j]) +
+               '&sort=new&t=month&limit=100');
+  }
+  return feeds;
+}
 
-      if (code === 200) {
-        var body = response.getContentText();
-        try {
-          var parsed = JSON.parse(body);
-          FETCH_LOG.ok++;
-          return parsed;
-        } catch (e) {
-          // HTTP 200 carrying HTML means an interstitial or block page.
-          noteSample(body);
-          break;
-        }
-      }
+function decodeEntities(text) {
+  return String(text || '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, function (m, code) { return String.fromCharCode(Number(code)); })
+    .replace(/&amp;/g, '&');
+}
 
-      if (code === 429 || code >= 500) {
-        Utilities.sleep(CONFIG.REQUEST_DELAY_MS * Math.pow(2, attempt + 1));
-        continue;
-      }
+/** Feed bodies are HTML. Reduce them to the plain text the filters expect. */
+function htmlToText(html) {
+  var text = decodeEntities(html);
+  text = text.replace(/<[^>]*>/g, ' ');
+  text = decodeEntities(text).replace(/\s+/g, ' ').trim();
+  // Every feed entry ends with Reddit's own "submitted by /u/x ... [comments]".
+  var footer = text.lastIndexOf('submitted by');
+  if (footer > 0 && text.length - footer < 200) {
+    text = text.slice(0, footer).trim();
+  }
+  return text;
+}
 
-      noteSample(response.getContentText());
-      break;
+function childText(element, name, ns) {
+  var child = element.getChild(name, ns);
+  return child ? child.getText() : '';
+}
+
+function attr(element, name) {
+  if (!element) { return ''; }
+  var found = element.getAttribute(name);
+  return found ? found.getValue() : '';
+}
+
+/** Turn one Atom feed into post objects shaped like the JSON API's. */
+function parseFeed(xml) {
+  var ns = XmlService.getNamespace(ATOM_NS);
+  var entries = XmlService.parse(xml).getRootElement().getChildren('entry', ns);
+  var posts = [];
+
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i];
+
+    var id = childText(entry, 'id', ns).replace('t3_', '');
+    var link = attr(entry.getChild('link', ns), 'href');
+    var published = childText(entry, 'published', ns) || childText(entry, 'updated', ns);
+    var stamp = published ? new Date(published).getTime() / 1000 : 0;
+
+    var author = childText(entry.getChild('author', ns) || entry, 'name', ns);
+    var subreddit = attr(entry.getChild('category', ns), 'term');
+
+    // "https://www.reddit.com/r/x/comments/id/slug/" -> "/r/x/comments/id/slug/"
+    var permalink = link.replace(/^https?:\/\/[^\/]+/, '');
+
+    if (!id || !stamp) { continue; }
+
+    posts.push({
+      id: id,
+      title: decodeEntities(childText(entry, 'title', ns)),
+      selftext: htmlToText(childText(entry, 'content', ns)),
+      subreddit: subreddit || (permalink.split('/')[2] || ''),
+      author: String(author || '').replace('/u/', ''),
+      created_utc: stamp,
+      permalink: permalink,
+      num_comments: null,
+      removed_by_category: null
+    });
+  }
+  return posts;
+}
+
+function fetchFeed(url) {
+  for (var attempt = 0; attempt < 3; attempt++) {
+    var response;
+    try {
+      response = httpGet(url);
+    } catch (e) {
+      noteCode('exception');
+      noteSample(e.message);
+      return [];
     }
-  }
 
-  FETCH_LOG.failed++;
-  return null;
+    var code = response.getResponseCode();
+    noteCode(code);
+
+    if (code === 200) {
+      var body = response.getContentText();
+      try {
+        var posts = parseFeed(body);
+        FETCH_LOG.ok++;
+        FETCH_LOG.entries += posts.length;
+        return posts;
+      } catch (e) {
+        noteSample(body);
+        return [];
+      }
+    }
+
+    if (code === 429 || code >= 500) {
+      Utilities.sleep(CONFIG.REQUEST_DELAY_MS * Math.pow(2, attempt + 1));
+      continue;
+    }
+
+    noteSample(response.getContentText());
+    return [];
+  }
+  return [];
+}
+
+function fetchAllPosts() {
+  var feeds = buildFeeds();
+  var posts = [];
+  var seen = {};
+  var consecutiveFailures = 0;
+
+  FETCH_LOG = { ok: 0, failed: 0, entries: 0, byCode: {}, sample: '' };
+
+  for (var i = 0; i < feeds.length; i++) {
+    var batch = fetchFeed(feeds[i]);
+
+    if (!batch.length) {
+      FETCH_LOG.failed++;
+      consecutiveFailures++;
+      // Only bail if nothing at all has worked. A search feed returning
+      // nothing is normal; every feed failing from the start is a block.
+      if (FETCH_LOG.ok === 0 && consecutiveFailures >= 8) {
+        throw new Error(
+          'Reddit returned nothing usable for the first ' + consecutiveFailures +
+          ' feeds. Response codes: ' + JSON.stringify(FETCH_LOG.byCode) +
+          ' | first body: ' + (FETCH_LOG.sample || '(empty)'));
+      }
+      Utilities.sleep(CONFIG.REQUEST_DELAY_MS);
+      continue;
+    }
+
+    consecutiveFailures = 0;
+    for (var b = 0; b < batch.length; b++) {
+      if (!seen[batch[b].id]) {
+        seen[batch[b].id] = true;
+        posts.push(batch[b]);
+      }
+    }
+    Utilities.sleep(CONFIG.REQUEST_DELAY_MS);
+  }
+  return posts;
 }
 
 /**
- * Diagnostic: run this on its own to see exactly what Reddit answers.
- * Check View > Logs afterwards.
+ * Diagnostic: run this alone to see what Reddit answers for each feed type.
+ * Check the execution log afterwards.
  */
 function testFetch() {
   var urls = [
-    'https://www.reddit.com/r/forhire/new.json?limit=5&raw_json=1',
-    'https://old.reddit.com/r/forhire/new.json?limit=5&raw_json=1',
-    'https://www.reddit.com/r/forhire/new.rss?limit=5'
+    'https://www.reddit.com/r/forhire/new.rss?limit=25',
+    'https://www.reddit.com/r/forhire/search.rss?q=' + encodeURIComponent(FEED_QUERY) +
+      '&restrict_sr=1&sort=new&t=month&limit=25',
+    'https://www.reddit.com/search.rss?q=' + encodeURIComponent('hiring AI engineer remote') +
+      '&sort=new&t=month&limit=25'
   ];
   var lines = [];
   for (var i = 0; i < urls.length; i++) {
@@ -202,15 +302,25 @@ function testFetch() {
     try {
       var response = httpGet(urls[i]);
       var body = response.getContentText();
-      var children = -1;
+      var posts = [];
+      var parseError = '';
       try {
-        children = ((JSON.parse(body).data || {}).children || []).length;
+        posts = parseFeed(body);
       } catch (e) {
-        children = -1;
+        parseError = e.message;
       }
       line = urls[i] + '\n    HTTP ' + response.getResponseCode() +
-             ' | bytes ' + body.length + ' | posts parsed ' + children +
-             '\n    body: ' + body.replace(/\s+/g, ' ').slice(0, 250);
+             ' | bytes ' + body.length + ' | entries parsed ' + posts.length +
+             (parseError ? ' | parse error: ' + parseError : '');
+      if (posts.length) {
+        line += '\n    newest: "' + posts[0].title.slice(0, 70) + '"' +
+                ' by u/' + posts[0].author +
+                ' in r/' + posts[0].subreddit +
+                ' | body chars ' + posts[0].selftext.length +
+                ' | ' + ((Date.now() / 1000 - posts[0].created_utc) / 3600).toFixed(1) + 'h ago';
+      } else {
+        line += '\n    body: ' + body.replace(/\s+/g, ' ').slice(0, 200);
+      }
     } catch (e) {
       line = urls[i] + '\n    EXCEPTION: ' + e.message;
     }
@@ -220,47 +330,6 @@ function testFetch() {
   var report = lines.join('\n\n');
   Logger.log(report);
   return report;
-}
-
-function fetchAllPosts() {
-  var urls = buildUrls();
-  var posts = [];
-  var seen = {};
-  var consecutiveFailures = 0;
-
-  FETCH_LOG = { ok: 0, failed: 0, byCode: {}, sample: '' };
-
-  for (var i = 0; i < urls.length; i++) {
-    var payload = fetchJson(urls[i]);
-
-    if (!payload) {
-      consecutiveFailures++;
-      // Six failures in a row is a block, not bad luck. Stop rather than
-      // spend the whole Apps Script quota discovering that 50 more times.
-      if (consecutiveFailures >= 6) {
-        throw new Error(
-          'Reddit refused the first ' + consecutiveFailures + ' requests, so no ' +
-          'leads could be collected. Response codes: ' + JSON.stringify(FETCH_LOG.byCode) +
-          ' | first response body: ' + (FETCH_LOG.sample || '(empty)') +
-          ' -- Reddit blocks or throttles requests from datacenter IP ranges, which is ' +
-          'where Apps Script runs. Run the Python version from your own machine instead.');
-      }
-      Utilities.sleep(CONFIG.REQUEST_DELAY_MS);
-      continue;
-    }
-
-    consecutiveFailures = 0;
-    var children = (payload.data && payload.data.children) || [];
-    for (var c = 0; c < children.length; c++) {
-      var post = children[c].data;
-      if (post && post.id && !seen[post.id]) {
-        seen[post.id] = true;
-        posts.push(post);
-      }
-    }
-    Utilities.sleep(CONFIG.REQUEST_DELAY_MS);
-  }
-  return posts;
 }
 
 // --- Text matching ----------------------------------------------------------
@@ -395,7 +464,6 @@ function buildLeads(posts) {
     if (hits(titleLower, REMOTE).length) { score += 2; reasons.push('remote stated in title'); }
     if (body.length > 400) { score += 2; reasons.push('detailed post'); }
     else if (body.length < 80) { score -= 2; reasons.push('very short post'); }
-    score += Math.min((post.num_comments || 0) * 0.1, 2);
 
     leads.push({
       score: Math.round(score * 100) / 100,
@@ -415,7 +483,7 @@ function buildLeads(posts) {
         'u/' + post.author,
         'https://www.reddit.com' + post.permalink,
         contactHint(post, body),
-        post.num_comments || 0,
+        post.num_comments === null ? 'n/a' : post.num_comments,
         Math.round(score * 100) / 100,
         reasons.join('; '),
         body.slice(0, 280)

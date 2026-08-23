@@ -107,6 +107,14 @@ Google Sheets without mangling non-ASCII characters.
 `google_apps_script/RedditLeads.gs` runs the same rules inside Google Sheets,
 with no local Python at all — Google's servers do the fetching.
 
+It reads Reddit's **Atom feeds** rather than the JSON API, because Reddit
+answers `.json` with HTTP 403 and a block page when the request comes from a
+datacenter IP range, which is where Apps Script runs. The `.rss` endpoints are
+served normally from those same addresses. The trade-off is that feeds carry no
+comment count (the column shows `n/a`) and search feeds sometimes omit the post
+body. Run `testFetch` first if anything looks wrong — it reports the HTTP
+status and parsed entry count for each feed type.
+
 1. Open <https://sheets.new>
 2. **Extensions → Apps Script**
 3. Delete the placeholder, paste the contents of `RedditLeads.gs`, **Save**
@@ -139,13 +147,25 @@ and the request delay. Adding a subreddit is one line.
 python3 -m unittest discover -s tests -v
 ```
 
-22 tests cover the onsite/negation logic, the AI-term false-positive guards,
+The Apps Script port has its own test, which shims the few Google APIs it uses
+so the Atom parsing and filtering can run outside Google:
+
+```bash
+npm install @xmldom/xmldom && node tests/test_apps_script.js
+```
+
+22 Python tests cover the onsite/negation logic, the AI-term false-positive guards,
 the recency window, self-promo exclusion, all four dedupe keys, and the
 end-to-end pipeline.
 
 ## Rate limits
 
-Reddit throttles unauthenticated clients. The client sends a descriptive
+Reddit throttles unauthenticated clients. The Python client sends a descriptive
 User-Agent, waits 2 seconds between requests, and backs off exponentially on
 `429` and `5xx`. If you still get throttled, raise `--delay`. Individual source
 failures are reported and skipped rather than aborting the run.
+
+Reddit also blocks the JSON API outright for datacenter IP ranges — cloud VMs,
+CI runners and Apps Script all get HTTP 403. Running the Python tool from a
+normal home or office connection is unaffected; running it on a VPS is not, and
+that is what the Atom-feed path in the Apps Script version works around.
