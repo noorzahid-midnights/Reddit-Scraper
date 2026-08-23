@@ -81,6 +81,50 @@ class TestAiRelevance(unittest.TestCase):
         self.assertTrue(filters.is_ai_related(filters.normalize("ai automation with n8n")))
 
 
+class TestAiWorkVsAntiAi(unittest.TestCase):
+    """A post mentioning AI to rule it out is not an AI lead."""
+
+    def test_negated_ai_term_does_not_count(self):
+        # r/slavelabour tasks routinely say "don't use ChatGPT".
+        score, strong, _ = filters.ai_relevance(
+            filters.normalize("Help me find cool shopping in Tokyo. "
+                              "Do not use ChatGPT for this."))
+        self.assertEqual(strong, [])
+        self.assertEqual(score, 0)
+
+    def test_anti_ai_post_rejected(self):
+        is_ai, _, reason = filters.classify_ai_work(
+            filters.normalize("Find shopping spots, $10. No AI generated lists, "
+                              "real human only."), "slavelabour")
+        self.assertFalse(is_ai)
+        self.assertIn("rules AI out", reason)
+
+    def test_real_ai_job_survives_an_anti_ai_aside(self):
+        # "no AI-written cover letters" on a genuine AI job must not reject it.
+        is_ai, evidence, reason = filters.classify_ai_work(
+            filters.normalize("[Hiring] Remote AI engineer for LangChain work. "
+                              "Do not send AI-generated cover letters."), "forhire")
+        self.assertTrue(is_ai, reason)
+        self.assertTrue(evidence)
+
+    def test_micro_task_sub_needs_a_strong_term(self):
+        is_ai, _, reason = filters.classify_ai_work(
+            filters.normalize("[TASK] Python homework help $20"), "slavelabour")
+        self.assertFalse(is_ai)
+        self.assertIn("micro-task", reason)
+
+    def test_micro_task_sub_keeps_real_ai_work(self):
+        is_ai, _, reason = filters.classify_ai_work(
+            filters.normalize("[TASK] Build me a ChatGPT bot for my store, $150"),
+            "slavelabour")
+        self.assertTrue(is_ai, reason)
+
+    def test_model_alone_is_not_ai(self):
+        # "model" used to be a weak AI term; a fashion or car listing is not AI.
+        self.assertFalse(filters.is_ai_related(
+            filters.normalize("Need a model for a photoshoot, paying $200")))
+
+
 class TestRecency(unittest.TestCase):
     def test_within_window(self):
         self.assertTrue(filters.is_recent(NOW - 13 * 86400, 14, NOW))

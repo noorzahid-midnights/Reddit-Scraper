@@ -61,11 +61,19 @@ var GLOBAL_QUERIES = ['hiring AI engineer remote',
                       'need AI agent developer remote paid'];
 
 var AI_STRONG = ['artificial intelligence','machine learning','deep learning','large language model','llm','llms','generative ai','genai','gpt','chatgpt','openai','anthropic','claude','gemini','llama','mistral','hugging face','huggingface','langchain','langgraph','llamaindex','crewai','autogen','rag','vector database','pinecone','embeddings','chatbot','chat bot','voice agent','conversational ai','nlp','natural language processing','computer vision','prompt engineer','prompt engineering','fine-tune','fine tune','fine-tuning','stable diffusion','comfyui','midjourney','pytorch','tensorflow','mlops','ml engineer','ai engineer','ai developer','ai agent','ai agents','agentic','whisper','text to speech','speech to text','ocr','data annotation','ai automation','ai workflow','n8n'];
-var AI_WEAK = ['ai','automation','automate','zapier','scraper','scraping','python','model','algorithm'];
+var AI_WEAK = ['ai','automation','automate','zapier','scraper','scraping','python','algorithm'];
 var HIRING = ['hiring','looking for','looking to hire','seeking','need someone','need a developer','need help','want to hire','job opening','open position','vacancy','recruiting','contract','contractor','freelance','freelancer','consultant','budget','paid','will pay','compensation','salary','rate','apply','dm me','pm me'];
 var REMOTE = ['remote','fully remote','work from home','wfh','telecommute','anywhere','worldwide','global','any timezone','distributed team','async','online','virtual'];
 var ONSITE = ['onsite','on-site','on site','in-person','in person','in office','in-office','on premise','on-premise','hybrid','must be located','must be based','must reside','must live in','must be local','local only','locals only','local candidates','relocate','relocation','commute','commutable','days in the office','days in office','come to the office','our office','office-based','office based'];
 var NEGATIONS = ['no','not','non','never','zero','without','avoid'];
+// Task subreddits are full of "no AI generated answers, I want a real person".
+// Those posts name ChatGPT precisely because they are NOT AI work.
+var ANTI_AI_MARKERS = ['no ai','no a.i.','not ai','without ai','no chatgpt','no gpt','no ai generated','not ai generated','no ai-generated','no ai written','human written','human-written','written by a human','real human','actual human','real person','no bots','no bot','no automation','no scripts','manually only','by hand only','not generated','no llm'];
+// Tokens that cancel an AI mention when they appear shortly before it.
+var AI_NEGATIONS = ['no','not','non','never','zero','without','avoid','dont',"don't",'doesnt',"doesn't",'wont',"won't",'isnt',"isn't",'arent',"aren't","cant","can't"];
+var AI_NEGATION_WINDOW = 30;
+// Micro-task subreddits, where a couple of weak words means nothing.
+var LOW_SIGNAL_SUBS = ['slavelabour','donedirtcheap'];
 var REMOTE_SUBS = ['remotejobs','remotejs','workonline','jobbit'];
 var SELF_PROMO_PREFIX = ['[for hire]','[forhire]','(for hire)','for hire','[available]','available for hire','hire me','[offer]','[advert]'];
 var JOB_TERMS = ['full-time','full time','part-time','part time','salary','salaried','benefits','position','role','employee','annual','per year','/yr'];
@@ -521,6 +529,63 @@ function demandPatterns(text) {
   return found;
 }
 
+/**
+ * True when a negation word appears shortly before this position.
+ *
+ * Looser than the onsite check, which only inspects the immediately preceding
+ * word: "do not use ChatGPT" and "without using AI" both put words between
+ * the negation and the term.
+ */
+function negatedNearby(text, at) {
+  var before = text.slice(Math.max(0, at - AI_NEGATION_WINDOW), at);
+  var words = before.replace(/[^a-z0-9' ]/g, ' ').split(' ');
+  for (var i = 0; i < words.length; i++) {
+    if (words[i] && AI_NEGATIONS.indexOf(words[i]) !== -1) { return true; }
+  }
+  return false;
+}
+
+/** Terms that appear without a negation just before them. */
+function hitsUnnegated(text, terms) {
+  var found = [];
+  for (var i = 0; i < terms.length; i++) {
+    var term = terms[i];
+    var at = 0;
+    while (true) {
+      var idx = findTerm(text, term, at);
+      if (idx === -1) { break; }
+      if (!negatedNearby(text, idx)) { found.push(term); break; }
+      at = idx + 1;
+    }
+  }
+  found.sort(function (a, b) { return b.length - a.length; });
+  return found;
+}
+
+/**
+ * Is the post genuinely about AI work?
+ *
+ * A post can legitimately say "no AI-written cover letters" while still being
+ * an AI job, so an anti-AI phrase only rejects when nothing real is named.
+ */
+function classifyAiWork(text, subreddit) {
+  var strong = hitsUnnegated(text, AI_STRONG);
+  var weak = hitsUnnegated(text, AI_WEAK);
+
+  if (!strong.length) {
+    var excluded = hits(text, ANTI_AI_MARKERS);
+    if (excluded.length) {
+      return { ok: false, reason: 'post rules AI out (' + excluded[0] + ')' };
+    }
+    if (LOW_SIGNAL_SUBS.indexOf(String(subreddit || '').toLowerCase()) !== -1) {
+      return { ok: false, reason: 'micro-task subreddit with no specific AI work named' };
+    }
+    if (weak.length < 2) { return { ok: false, reason: 'not AI-related' }; }
+  }
+
+  return { ok: true, strong: strong, weak: weak };
+}
+
 function hasHiringTag(titleLower) {
   return /^\s*[\[\(]?\s*hiring\b/.test(titleLower) ||
          titleLower.indexOf('[hiring]') !== -1 ||
@@ -632,9 +697,14 @@ function buildLeads(posts) {
     var body = collapse(post.selftext);
     var text = titleLower + ' . ' + body.toLowerCase();
 
-    var strong = hits(text, AI_STRONG);
-    var weak = hits(text, AI_WEAK);
-    if (strong.length === 0 && weak.length < 2) { continue; }
+    var ai = classifyAiWork(text, post.subreddit);
+    if (!ai.ok) {
+      // Worth auditing: these are posts that mention AI but are not AI work.
+      if (ai.reason !== 'not AI-related') { drop(post, title, ai.reason); }
+      continue;
+    }
+    var strong = ai.strong;
+    var weak = ai.weak;
 
     var pay = extractPay(title + ' ' + body);
 

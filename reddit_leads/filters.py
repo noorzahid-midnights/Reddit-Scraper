@@ -88,14 +88,46 @@ def classify_location(text, subreddit):
     return False, "", "no explicit remote statement"
 
 
+def _negated_nearby(text, start, window=config.AI_NEGATION_WINDOW):
+    """True when a negation word appears shortly before this position.
+
+    Looser than the onsite check, which only looks at the immediately
+    preceding word: "do not use ChatGPT" and "without using AI" both put
+    words between the negation and the term.
+    """
+    before = text[max(0, start - window):start]
+    for negation in config.NEGATION_PREFIXES:
+        if re.search(r"\b" + re.escape(negation) + r"\b", before):
+            return True
+    return False
+
+
+def find_terms_unnegated(text, terms):
+    """Terms that appear in text without a negation just before them."""
+    found = []
+    for term in terms:
+        for match in _pattern(term).finditer(text):
+            if not _negated_nearby(text, match.start()):
+                found.append(term)
+                break
+    found.sort(key=len, reverse=True)
+    return found
+
+
+def anti_ai_markers(text):
+    """Phrases saying the poster wants AI kept out of the work."""
+    return find_terms(text, config.ANTI_AI_MARKERS)
+
+
 def ai_relevance(text):
     """Score how much this post is about AI work.
 
     Strong terms stand on their own; weak terms only add once a strong term
-    has already established that the post is AI work.
+    has already established that the post is AI work. Negated mentions do not
+    count at all - "do not use ChatGPT" is a post about anything but AI.
     """
-    strong = find_terms(text, config.AI_TERMS_STRONG)
-    weak = find_terms(text, config.AI_TERMS_WEAK)
+    strong = find_terms_unnegated(text, config.AI_TERMS_STRONG)
+    weak = find_terms_unnegated(text, config.AI_TERMS_WEAK)
     score = len(strong) * 3
     if strong:
         score += min(len(weak), 4)
@@ -262,3 +294,27 @@ def classify_intent(title, body, subreddit):
     elif contact:
         evidence.append(contact[0])
     return True, "; ".join(evidence), ""
+
+
+def classify_ai_work(text, subreddit):
+    """Decide whether the post is genuinely about AI work.
+
+    Returns (is_ai, evidence, reason).
+    """
+    strong = find_terms_unnegated(text, config.AI_TERMS_STRONG)
+
+    # A post can legitimately say "no AI-written cover letters" while still
+    # being an AI job, so this only rejects when nothing real is named.
+    if not strong:
+        excluded = anti_ai_markers(text)
+        if excluded:
+            return False, "", "post rules AI out (%s)" % excluded[0]
+
+    if subreddit.lower() in config.LOW_SIGNAL_SUBREDDITS and not strong:
+        return False, "", "micro-task subreddit with no specific AI work named"
+
+    if not is_ai_related(text):
+        return False, "", "not AI-related"
+
+    weak = find_terms_unnegated(text, config.AI_TERMS_WEAK)
+    return True, ", ".join((strong or weak)[:4]), ""

@@ -106,7 +106,7 @@ AI_TERMS_STRONG = [
 AI_TERMS_WEAK = [
     "ai", "a.i.", "automation", "automate", "n8n", "zapier", "make.com",
     "scraper", "scraping", "data pipeline", "python", "api integration",
-    "model", "algorithm", "chat",
+    "algorithm",
 ]
 
 # --- What counts as someone with money to spend ------------------------------
@@ -292,3 +292,23 @@ TITLE_NOISE = {
 # Subreddits that exist to host gigs. Elsewhere (discussion-oriented AI subs)
 # the bar is raised, because that is where courses, news and rants come from.
 GIG_SUBREDDIT_SET = {s.lower() for s in GIG_SUBREDDITS}
+
+
+# --- Posts that mention AI only to rule it out -------------------------------
+# Task subreddits are full of "no AI generated answers, I want a real person".
+# Those posts mention ChatGPT precisely because they are NOT AI work.
+ANTI_AI_MARKERS = [
+    "no ai", "no a.i.", "not ai", "without ai", "no chatgpt", "no gpt",
+    "no ai generated", "not ai generated", "no ai-generated",
+    "no ai written", "human written", "human-written", "written by a human",
+    "real human", "actual human", "real person", "no bots", "no bot",
+    "no automation", "no scripts", "manually only", "by hand only",
+    "not generated", "no llm",
+]
+
+# How far back to look for a negation before an AI term.
+AI_NEGATION_WINDOW = 30
+
+# Micro-task subreddits, where a couple of weak words means nothing. A lead
+# from these has to name real AI work.
+LOW_SIGNAL_SUBREDDITS = {"slavelabour", "donedirtcheap"}

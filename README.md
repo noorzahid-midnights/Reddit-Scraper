@@ -43,6 +43,16 @@ A post has to clear every one of these:
    not "s**ai**d" or "m**ai**ntain". Strong terms (`langchain`, `llm`, `rag`,
    `computer vision`, …) qualify a post on their own; weak ones (`python`,
    `automation`) only count when two or more appear together.
+
+   Crucially, a **negated** mention does not count. Task subreddits are full of
+   "do not use ChatGPT" and "no AI generated answers, I want a real person" —
+   posts that name AI precisely because they are *not* AI work. A phrase ruling
+   AI out rejects the post outright, unless some genuine, un-negated AI term is
+   also present: "[Hiring] AI engineer — no AI-written cover letters" is still
+   a real lead.
+
+   In the micro-task subreddits (`r/slavelabour`, `r/DoneDirtCheap`) a couple of
+   weak words means nothing, so a lead there must name real AI work.
 3. **Someone hiring, not someone talking.** See below — this is the gate that
    keeps out course ads, news and venting.
 4. **Remote, strictly.** See below.
@@ -212,8 +222,8 @@ node tests/test_apps_script.js   # Atom parsing, filtering, noise rejection
 node tests/test_scheduling.js    # append-only sheet, dedupe across runs, triggers
 ```
 
-34 Python tests cover the demand gate and its noise classes, the
-onsite/negation logic, the AI-term false-positive guards,
+40 Python tests cover the demand gate and its noise classes, the
+AI-negation logic, the onsite/negation logic, the AI-term false-positive guards,
 the recency window, self-promo exclusion, all four dedupe keys, and the
 end-to-end pipeline.
 

@@ -30,8 +30,9 @@ def build_lead(post, max_age_days, now):
     if filters.is_seeking_work(title, post.get("selftext", "")):
         return None, "author is offering services, not hiring"
 
-    if not filters.is_ai_related(text):
-        return None, "not AI-related"
+    is_ai, ai_evidence, not_ai = filters.classify_ai_work(text, subreddit)
+    if not is_ai:
+        return None, not_ai
 
     is_gig, intent_evidence, not_a_gig = filters.classify_intent(
         title, post.get("selftext", ""), subreddit)

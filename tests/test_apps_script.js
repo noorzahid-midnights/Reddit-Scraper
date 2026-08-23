@@ -118,6 +118,23 @@ for (const [id, label] of Object.entries(noise)) {
 console.log('\nall noise dropped:', allDropped);
 console.log('\nfilter rejects:', ['bbb222 (onsite)','ccc333 (for hire)','ddd444 (20 days old)']
   .filter((_, i) => !out.rows.some(r => r[10].includes(['bbb222','ccc333','ddd444'][i]))).join(', '));
+console.log('\n=== AI mentioned only to rule it out ===');
+const aiCases = [
+  ['[task] help me find cool shopping in tokyo. $15. do not use chatgpt for this.','slavelabour', false],
+  ['[task] find shopping spots. $10. no ai generated lists, real human only.','slavelabour', false],
+  ['[task] python homework help $20','slavelabour', false],
+  ['[task] build me a chatgpt bot for my store, paying $150','slavelabour', true],
+  ['[hiring] remote ai engineer. do not send ai-generated cover letters.','forhire', true],
+  ['need a model for a photoshoot, paying $200','forhire', false],
+];
+let aiOk = true;
+for (const [t, sub, expected] of aiCases) {
+  const r = classifyAiWork(t, sub);
+  if (r.ok !== expected) { aiOk = false; }
+  console.log(` ${r.ok === expected ? 'ok  ' : 'WRONG'} | ${(r.ok ? 'KEEP' : 'drop')} | ${t.slice(0, 46)}`);
+}
+console.log('  all AI classifications correct:', aiOk);
+
 console.log('\nsample row url:', out.rows[0][10]);
 console.log('comments col:', JSON.stringify(out.rows[0][12]));
-if (!allDropped) { process.exitCode = 1; }
+if (!allDropped || !aiOk) { process.exitCode = 1; }
